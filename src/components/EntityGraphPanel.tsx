@@ -318,7 +318,7 @@ function EntityGraphPanel({ entity, onClose }: Props) {
         transition={{ type: 'spring', damping: 25, stiffness: 200 }}
         className="fixed top-0 right-0 h-full z-[500] flex flex-col glass-panel"
         style={{
-          width: expanded ? '60vw' : '480px', maxWidth: '90vw',
+          width: expanded ? '100vw' : '480px', maxWidth: expanded ? '100vw' : '90vw',
           borderLeft: '1px solid var(--border-primary)',
           borderRight: 'none',
           borderTop: 'none',
