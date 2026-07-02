@@ -72,6 +72,45 @@ const UA_OBLAST_CENTROIDS: Record<string, [number, number]> = {
   'Sevastopol':                 [33.526, 44.616],
 };
 
+// Geographic adjacency: only adjacent oblasts can form a propagation vector.
+// Non-adjacent pairs in a wave reflect simultaneous activations, not directionality.
+const UA_OBLAST_ADJACENCY: Record<string, string[]> = {
+  'Chernihiv Oblast':           ['Kyiv Oblast', 'Sumy Oblast', 'Cherkasy Oblast'],
+  'Sumy Oblast':                ['Chernihiv Oblast', 'Poltava Oblast', 'Kharkiv Oblast'],
+  'Kharkiv Oblast':             ['Sumy Oblast', 'Poltava Oblast', 'Dnipropetrovsk Oblast', 'Donetsk Oblast', 'Luhansk Oblast'],
+  'Luhansk Oblast':             ['Kharkiv Oblast', 'Donetsk Oblast'],
+  'Donetsk Oblast':             ['Kharkiv Oblast', 'Luhansk Oblast', 'Zaporizhzhia Oblast', 'Dnipropetrovsk Oblast'],
+  'Zaporizhzhia Oblast':        ['Donetsk Oblast', 'Dnipropetrovsk Oblast', 'Kherson Oblast'],
+  'Kherson Oblast':             ['Zaporizhzhia Oblast', 'Mykolaiv Oblast', 'Crimea'],
+  'Crimea':                     ['Kherson Oblast', 'Sevastopol'],
+  'Sevastopol':                 ['Crimea'],
+  'Mykolaiv Oblast':            ['Kherson Oblast', 'Odesa Oblast', 'Dnipropetrovsk Oblast', 'Kirovohrad Oblast'],
+  'Odesa Oblast':               ['Mykolaiv Oblast', 'Kirovohrad Oblast', 'Vinnytsia Oblast'],
+  'Dnipropetrovsk Oblast':      ['Kharkiv Oblast', 'Donetsk Oblast', 'Zaporizhzhia Oblast', 'Kherson Oblast', 'Mykolaiv Oblast', 'Kirovohrad Oblast', 'Poltava Oblast'],
+  'Poltava Oblast':             ['Sumy Oblast', 'Kharkiv Oblast', 'Dnipropetrovsk Oblast', 'Kirovohrad Oblast', 'Cherkasy Oblast', 'Kyiv Oblast'],
+  'Kirovohrad Oblast':          ['Dnipropetrovsk Oblast', 'Mykolaiv Oblast', 'Odesa Oblast', 'Vinnytsia Oblast', 'Cherkasy Oblast', 'Poltava Oblast'],
+  'Cherkasy Oblast':            ['Kyiv Oblast', 'Poltava Oblast', 'Kirovohrad Oblast', 'Vinnytsia Oblast', 'Khmelnytskyi Oblast', 'Zhytomyr Oblast'],
+  'Kyiv Oblast':                ['Chernihiv Oblast', 'Sumy Oblast', 'Poltava Oblast', 'Cherkasy Oblast', 'Vinnytsia Oblast', 'Zhytomyr Oblast', 'Kyiv'],
+  'Kyiv':                       ['Kyiv Oblast'],
+  'Zhytomyr Oblast':            ['Kyiv Oblast', 'Cherkasy Oblast', 'Vinnytsia Oblast', 'Khmelnytskyi Oblast', 'Rivne Oblast', 'Volyn Oblast'],
+  'Vinnytsia Oblast':           ['Kyiv Oblast', 'Cherkasy Oblast', 'Kirovohrad Oblast', 'Odesa Oblast', 'Khmelnytskyi Oblast', 'Zhytomyr Oblast'],
+  'Khmelnytskyi Oblast':        ['Zhytomyr Oblast', 'Vinnytsia Oblast', 'Ternopil Oblast', 'Lviv Oblast', 'Rivne Oblast', 'Cherkasy Oblast'],
+  'Rivne Oblast':               ['Volyn Oblast', 'Zhytomyr Oblast', 'Khmelnytskyi Oblast', 'Ternopil Oblast', 'Lviv Oblast'],
+  'Volyn Oblast':               ['Rivne Oblast', 'Zhytomyr Oblast', 'Lviv Oblast'],
+  'Lviv Oblast':                ['Volyn Oblast', 'Rivne Oblast', 'Khmelnytskyi Oblast', 'Ternopil Oblast', 'Ivano-Frankivsk Oblast', 'Zakarpattia Oblast'],
+  'Ternopil Oblast':            ['Rivne Oblast', 'Khmelnytskyi Oblast', 'Lviv Oblast', 'Ivano-Frankivsk Oblast', 'Chernivtsi Oblast'],
+  'Ivano-Frankivsk Oblast':     ['Lviv Oblast', 'Ternopil Oblast', 'Chernivtsi Oblast', 'Zakarpattia Oblast'],
+  'Zakarpattia Oblast':         ['Lviv Oblast', 'Ivano-Frankivsk Oblast'],
+  'Chernivtsi Oblast':          ['Ternopil Oblast', 'Ivano-Frankivsk Oblast'],
+};
+
+// Dev-time integrity check — mismatched keys silently drop vectors
+if (process.env.NODE_ENV !== 'production') {
+  for (const k of Object.keys(UA_OBLAST_ADJACENCY)) {
+    if (!UA_OBLAST_CENTROIDS[k]) console.warn(`[alarm-history] adjacency key '${k}' not in centroid map`);
+  }
+}
+
 // Normalise oblast names coming from the history file (which uses "Kharkiv oblast"
 // lowercase "o") to match the centroid map keys (title-case "Oblast").
 function normKey(name: string): string {
@@ -98,6 +137,8 @@ const RECENT_WINDOW_MS = 2 * 60 * 60 * 1_000;
 const VECTOR_WINDOW_MS = 40 * 60 * 1_000;
 
 // Euclidean distance thresholds (degrees) — fine for this scale.
+// MIN_DIST_DEG is intentionally 0.8 (not the spec's 0.5): tighter filter eliminates
+// Kyiv city ↔ Kyiv Oblast noise which share nearly the same centroid.
 const MIN_DIST_DEG = 0.8;
 const MAX_DIST_DEG = 8.0;
 
@@ -190,6 +231,11 @@ export async function buildAlarmVectors(): Promise<AlarmVector[]> {
       const to   = wave[i + 1];
 
       if (from.oblast === to.oblast) continue;
+
+      // Same 5-min snapshot = simultaneous alarms, not sequential — bearing is noise
+      if (from.ts === to.ts) continue;
+      // Adjacency gate: non-adjacent oblasts cannot be connected (critical for correctness)
+      if (!UA_OBLAST_ADJACENCY[from.oblast]?.includes(to.oblast)) continue;
 
       const fromCoords = UA_OBLAST_CENTROIDS[from.oblast];
       const toCoords   = UA_OBLAST_CENTROIDS[to.oblast];
