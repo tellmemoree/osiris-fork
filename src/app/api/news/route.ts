@@ -404,7 +404,7 @@ interface ParsedArticle {
   title: string;
   description: string;
   link: string;
-  pubDate: string;
+  pubDate: string | null;
   source: string;
   hasVideo: boolean;
 }
@@ -428,7 +428,7 @@ function parseTelegramHTML(html: string, channel: string): ParsedArticle[] {
     const dateRegex = /<a class="tgme_widget_message_date" href="(https:\/\/t\.me\/[^"]+)"[\s\S]*?<time[^>]*datetime="([^"]+)"/i;
     const dateMatch = blockHtml.match(dateRegex);
     const link = dateMatch ? dateMatch[1] : `https://t.me/${channel}`;
-    const pubDate = dateMatch ? dateMatch[2] : new Date().toISOString();
+    const pubDate = dateMatch ? dateMatch[2] : null;
 
     const title = text.split('\n')[0].substring(0, 100);
     const hasVideo = /tgme_widget_message_video|tgme_widget_message_roundvideo|<video[\s>]/i.test(blockHtml);
@@ -454,8 +454,10 @@ async function fetchChannelWithPagination(channel: string, cutoffMs: number): Pr
       const html = await res.text();
       const posts = parseTelegramHTML(html, channel);
       if (!posts.length) break;
-      all.push(...posts.filter(p => new Date(p.pubDate).getTime() > cutoffMs));
-      const oldestMs = Math.min(...posts.map(p => new Date(p.pubDate).getTime()));
+      // Posts with no parseable date are treated as recent — include them.
+      all.push(...posts.filter(p => !p.pubDate || new Date(p.pubDate).getTime() > cutoffMs));
+      const knownTimes = posts.flatMap(p => p.pubDate ? [new Date(p.pubDate).getTime()] : []);
+      const oldestMs = knownTimes.length ? Math.min(...knownTimes) : Date.now();
       if (oldestMs <= cutoffMs) break;
       const ids = posts.flatMap(p => { const m = p.link.match(/\/(\d+)$/); return m ? [parseInt(m[1], 10)] : []; });
       if (!ids.length) break;
@@ -501,7 +503,7 @@ function parseRSSItems(xml: string, sourceName: string): ParsedArticle[] {
       title: title.length > 100 ? title.substring(0, 100) + '...' : title,
       description: desc,
       link: getTag('link'),
-      pubDate: getTag('pubDate') || new Date().toISOString(),
+      pubDate: getTag('pubDate') || null,
       source: sourceName,
       hasVideo: false,
     });
@@ -518,7 +520,7 @@ async function buildNews(): Promise<unknown> {
 
     if (disk && now - disk.updatedAt < REFRESH_INTERVAL_MS) {
       // Cache is fresh — use it directly
-      rawArticles = disk.raw.filter(a => new Date(a.pubDate).getTime() > now - DISK_HORIZON_MS);
+      rawArticles = disk.raw.filter(a => !a.pubDate || new Date(a.pubDate).getTime() > now - DISK_HORIZON_MS);
       // Kick off a background refresh when cache is getting stale (> 45 min) so next request sees fresh data
       if (now - disk.updatedAt > 45 * 60 * 1000 && now - lastRefreshAt > REFRESH_INTERVAL_MS) {
         lastRefreshAt = now;
@@ -532,7 +534,7 @@ async function buildNews(): Promise<unknown> {
             const byLink = new Map<string, ParsedArticle>();
             for (const a of [...disk.raw, ...fresh]) {
               const key = a.link || `${a.source}:${a.pubDate}`;
-              if (!byLink.has(key) && new Date(a.pubDate).getTime() > horizon) byLink.set(key, a);
+              if (!byLink.has(key) && (!a.pubDate || new Date(a.pubDate).getTime() > horizon)) byLink.set(key, a);
             }
             await writeDiskCache(Array.from(byLink.values()));
           } catch { /* background — swallow */ }
@@ -550,7 +552,7 @@ async function buildNews(): Promise<unknown> {
       const existing = disk?.raw ?? [];
       for (const a of [...existing, ...fresh]) {
         const key = a.link || `${a.source}:${a.pubDate}`;
-        if (!byLink.has(key) && new Date(a.pubDate).getTime() > horizon) byLink.set(key, a);
+        if (!byLink.has(key) && (!a.pubDate || new Date(a.pubDate).getTime() > horizon)) byLink.set(key, a);
       }
       rawArticles = Array.from(byLink.values());
       await writeDiskCache(rawArticles);
@@ -620,7 +622,12 @@ async function buildNews(): Promise<unknown> {
       };
     });
 
-    newsItems.sort((a, b) => new Date(b.published).getTime() - new Date(a.published).getTime());
+    newsItems.sort((a, b) => {
+      if (!a.published && !b.published) return 0;
+      if (!a.published) return 1;
+      if (!b.published) return -1;
+      return new Date(b.published).getTime() - new Date(a.published).getTime();
+    });
 
     return { news: newsItems, total: newsItems.length, timestamp: new Date().toISOString() };
   } catch {

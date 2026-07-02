@@ -372,12 +372,12 @@ export default function LiveAlerts({ data, onLocate, onWatchFeed }: LiveAlertsPr
                                   <div className="flex items-center justify-between border-t border-[#2A2A28]/50 pt-1.5 mt-1.5">
                                     <div className="flex items-center gap-2">
                                       <span className="text-[9px] font-mono text-[#8A8880] uppercase tracking-wider">{alert.source}</span>
-                                      {alert.time && (
-                                        <span className="text-[9px] font-mono text-[#5C5A54] flex items-center gap-1 border-l border-[#2A2A28] pl-2">
+                                      <span className="text-[9px] font-mono text-[#5C5A54] flex items-center gap-1 border-l border-[#2A2A28] pl-2">
                                           <Clock className="w-2.5 h-2.5" />
-                                          {new Date(alert.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                          {alert.time
+                                            ? new Date(alert.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                                            : 'time unknown'}
                                         </span>
-                                      )}
                                     </div>
                                     {alert.url && (
                                       <a
