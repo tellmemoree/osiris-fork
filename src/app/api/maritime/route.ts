@@ -723,7 +723,9 @@ function iso3ToEmoji(iso3: string): string {
 // Regular vessels expire 10 min after their last AIS report. Shadow-fleet vessels
 // are kept indefinitely — going AIS-dark is their signature evasion; last-known
 // position is itself intelligence and should not expire until they transmit again.
-const STALE_MS = 10 * 60 * 1000;
+// 2h: long enough to survive a disk-cache restore and cover ships at anchor or in
+// low-coverage areas; short enough to drop vessels that have genuinely left the feed.
+const STALE_MS = 2 * 60 * 60 * 1000;
 
 export async function GET(req: Request) {
   // ?tracks=1 — return the 24h position ring-buffers for shadow-fleet vessels.
