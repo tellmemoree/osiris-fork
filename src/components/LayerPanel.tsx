@@ -108,6 +108,7 @@ const getLayerGroups = (theme: 'core' | 'ghost') => {
       { key: 'missile_threats', label: 'Missile Threats', icon: Zap, color: '#FF4444', dataKey: 'missile_routes' },
       { key: 'power_outages', label: 'Power Outages', icon: Zap, color: '#FFD500', dataKey: 'power_outages' },
       { key: 'oblast_pressure', label: 'Oblast Pressure', icon: Activity, color: '#FF7043', dataKey: 'oblast_pressure' },
+      { key: 'mig31k', label: 'MiG-31K / Kinzhal Carrier', icon: Plane, color: '#FFAB00', dataKey: '' },
     ],
   },
   {
@@ -187,6 +188,10 @@ function LayerPanel({ data, activeLayers, setActiveLayers, isMobile, theme = 'co
   // shadow_fleet-flagged subset of maritime_ships. Count them explicitly so the
   // layer shows a tally instead of nothing.
   const countFor = (layer: { key: string; dataKey: string }): number | null => {
+    if (layer.key === 'mig31k') {
+      const n = data.mig31k?.detections?.length ?? 0;
+      return n > 0 ? n : null;
+    }
     if (layer.key === 'shadow_fleet') {
       return Array.isArray(data.maritime_ships)
         ? data.maritime_ships.filter((s: { shadow_fleet?: boolean }) => s?.shadow_fleet === true).length
