@@ -162,6 +162,22 @@ const WEAPON_VOCAB: Record<WeaponType, RegExp[]> = {
 // All weapon types in a stable iteration order.
 const ALL_WEAPON_TYPES: WeaponType[] = ['KAB', 'CRUISE', 'BALLISTIC', 'DRONE', 'KINZHAL', 'S300', 'KH22'];
 
+// ── MiG-31K / Kinzhal-carrier detection ─────────────────────────────────────
+
+// MiG-31K / Kinzhal-carrier mentions. NOT a WeaponType —
+// carrier sighting ≠ launch; kept out of WEAPON_VOCAB to prevent leakage
+// into weapon-threats / correlated-events.
+export const MIG31_PATTERNS: RegExp[] = [
+  /(?<!\p{L})м[иі]г[-\s]?31к?(?!\p{N})/iu,
+  /(?<!\p{L})mig[-\s]?31k?(?!\p{N})/iu,
+  /носі\p{L}*\s+["«']?кин(?:д)?жал/iu,
+  /(?<!\p{L})foxhound(?!\p{L})/iu,
+];
+
+export function isMig31Mention(text: string): boolean {
+  return MIG31_PATTERNS.some((re) => re.test(text));
+}
+
 // ── corpus cache constants ───────────────────────────────────────────────────
 
 const WINDOW_HOURS = 1.5;
