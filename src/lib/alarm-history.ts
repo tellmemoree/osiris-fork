@@ -75,13 +75,13 @@ const UA_OBLAST_CENTROIDS: Record<string, [number, number]> = {
 // Geographic adjacency: only adjacent oblasts can form a propagation vector.
 // Non-adjacent pairs in a wave reflect simultaneous activations, not directionality.
 const UA_OBLAST_ADJACENCY: Record<string, string[]> = {
-  'Chernihiv Oblast':           ['Kyiv Oblast', 'Sumy Oblast', 'Cherkasy Oblast'],
+  'Chernihiv Oblast':           ['Kyiv Oblast', 'Sumy Oblast'],                          // not adjacent to Cherkasy (Kyiv Oblast between)
   'Sumy Oblast':                ['Chernihiv Oblast', 'Poltava Oblast', 'Kharkiv Oblast'],
   'Kharkiv Oblast':             ['Sumy Oblast', 'Poltava Oblast', 'Dnipropetrovsk Oblast', 'Donetsk Oblast', 'Luhansk Oblast'],
   'Luhansk Oblast':             ['Kharkiv Oblast', 'Donetsk Oblast'],
   'Donetsk Oblast':             ['Kharkiv Oblast', 'Luhansk Oblast', 'Zaporizhzhia Oblast', 'Dnipropetrovsk Oblast'],
   'Zaporizhzhia Oblast':        ['Donetsk Oblast', 'Dnipropetrovsk Oblast', 'Kherson Oblast'],
-  'Kherson Oblast':             ['Zaporizhzhia Oblast', 'Mykolaiv Oblast', 'Crimea'],
+  'Kherson Oblast':             ['Zaporizhzhia Oblast', 'Mykolaiv Oblast', 'Crimea', 'Dnipropetrovsk Oblast'],
   'Crimea':                     ['Kherson Oblast', 'Sevastopol'],
   'Sevastopol':                 ['Crimea'],
   'Mykolaiv Oblast':            ['Kherson Oblast', 'Odesa Oblast', 'Dnipropetrovsk Oblast', 'Kirovohrad Oblast'],
@@ -89,15 +89,15 @@ const UA_OBLAST_ADJACENCY: Record<string, string[]> = {
   'Dnipropetrovsk Oblast':      ['Kharkiv Oblast', 'Donetsk Oblast', 'Zaporizhzhia Oblast', 'Kherson Oblast', 'Mykolaiv Oblast', 'Kirovohrad Oblast', 'Poltava Oblast'],
   'Poltava Oblast':             ['Sumy Oblast', 'Kharkiv Oblast', 'Dnipropetrovsk Oblast', 'Kirovohrad Oblast', 'Cherkasy Oblast', 'Kyiv Oblast'],
   'Kirovohrad Oblast':          ['Dnipropetrovsk Oblast', 'Mykolaiv Oblast', 'Odesa Oblast', 'Vinnytsia Oblast', 'Cherkasy Oblast', 'Poltava Oblast'],
-  'Cherkasy Oblast':            ['Kyiv Oblast', 'Poltava Oblast', 'Kirovohrad Oblast', 'Vinnytsia Oblast', 'Khmelnytskyi Oblast', 'Zhytomyr Oblast'],
-  'Kyiv Oblast':                ['Chernihiv Oblast', 'Sumy Oblast', 'Poltava Oblast', 'Cherkasy Oblast', 'Vinnytsia Oblast', 'Zhytomyr Oblast', 'Kyiv'],
+  'Cherkasy Oblast':            ['Kyiv Oblast', 'Poltava Oblast', 'Kirovohrad Oblast', 'Vinnytsia Oblast'], // not adjacent to Khmelnytskyi or Zhytomyr
+  'Kyiv Oblast':                ['Chernihiv Oblast', 'Poltava Oblast', 'Cherkasy Oblast', 'Vinnytsia Oblast', 'Zhytomyr Oblast', 'Kyiv'], // not adjacent to Sumy (Chernihiv between)
   'Kyiv':                       ['Kyiv Oblast'],
-  'Zhytomyr Oblast':            ['Kyiv Oblast', 'Cherkasy Oblast', 'Vinnytsia Oblast', 'Khmelnytskyi Oblast', 'Rivne Oblast', 'Volyn Oblast'],
+  'Zhytomyr Oblast':            ['Kyiv Oblast', 'Vinnytsia Oblast', 'Khmelnytskyi Oblast', 'Rivne Oblast'],  // not adjacent to Cherkasy or Volyn
   'Vinnytsia Oblast':           ['Kyiv Oblast', 'Cherkasy Oblast', 'Kirovohrad Oblast', 'Odesa Oblast', 'Khmelnytskyi Oblast', 'Zhytomyr Oblast'],
-  'Khmelnytskyi Oblast':        ['Zhytomyr Oblast', 'Vinnytsia Oblast', 'Ternopil Oblast', 'Lviv Oblast', 'Rivne Oblast', 'Cherkasy Oblast'],
+  'Khmelnytskyi Oblast':        ['Zhytomyr Oblast', 'Vinnytsia Oblast', 'Ternopil Oblast', 'Rivne Oblast'],  // not adjacent to Lviv (Ternopil between) or Cherkasy
   'Rivne Oblast':               ['Volyn Oblast', 'Zhytomyr Oblast', 'Khmelnytskyi Oblast', 'Ternopil Oblast', 'Lviv Oblast'],
-  'Volyn Oblast':               ['Rivne Oblast', 'Zhytomyr Oblast', 'Lviv Oblast'],
-  'Lviv Oblast':                ['Volyn Oblast', 'Rivne Oblast', 'Khmelnytskyi Oblast', 'Ternopil Oblast', 'Ivano-Frankivsk Oblast', 'Zakarpattia Oblast'],
+  'Volyn Oblast':               ['Rivne Oblast', 'Lviv Oblast'],                                             // not adjacent to Zhytomyr (Rivne between)
+  'Lviv Oblast':                ['Volyn Oblast', 'Rivne Oblast', 'Ternopil Oblast', 'Ivano-Frankivsk Oblast', 'Zakarpattia Oblast'], // not adjacent to Khmelnytskyi (Ternopil between)
   'Ternopil Oblast':            ['Rivne Oblast', 'Khmelnytskyi Oblast', 'Lviv Oblast', 'Ivano-Frankivsk Oblast', 'Chernivtsi Oblast'],
   'Ivano-Frankivsk Oblast':     ['Lviv Oblast', 'Ternopil Oblast', 'Chernivtsi Oblast', 'Zakarpattia Oblast'],
   'Zakarpattia Oblast':         ['Lviv Oblast', 'Ivano-Frankivsk Oblast'],
@@ -137,9 +137,9 @@ const RECENT_WINDOW_MS = 2 * 60 * 60 * 1_000;
 const VECTOR_WINDOW_MS = 40 * 60 * 1_000;
 
 // Euclidean distance thresholds (degrees) — fine for this scale.
-// MIN_DIST_DEG is intentionally 0.8 (not the spec's 0.5): tighter filter eliminates
-// Kyiv city ↔ Kyiv Oblast noise which share nearly the same centroid.
-const MIN_DIST_DEG = 0.8;
+// 0.5 filters Kyiv city↔Kyiv Oblast (centroid gap ~0.38°) while preserving
+// real adjacent pairs like Zaporizhzhia↔Dnipropetrovsk (0.65°) and Kherson↔Mykolaiv (0.71°).
+const MIN_DIST_DEG = 0.5;
 const MAX_DIST_DEG = 8.0;
 
 function euclidDist(aLng: number, aLat: number, bLng: number, bLat: number): number {

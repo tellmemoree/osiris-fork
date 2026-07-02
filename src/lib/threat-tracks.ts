@@ -96,8 +96,8 @@ function dedupKey(e: TrackEntry): string {
 
 /**
  * Merges `incoming` entries into the stored history, prunes entries older
- * than `ttlMs`, deduplicates by `${weaponType}:${channel}:${ts}`, writes back
- * to disk, and returns the updated array.
+ * than `ttlMs`, deduplicates via `dedupKey()` (fingerprint-primary, channel+ts
+ * fallback), writes back to disk, and returns the updated array.
  *
  * weaponType is part of the dedup key because the missile file is shared by all
  * missile types: a single message classified as two types (e.g. the generic
