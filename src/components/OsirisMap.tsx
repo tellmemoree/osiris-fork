@@ -432,6 +432,17 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
         paint: { 'line-color': '#FF7043', 'line-width': 1.2, 'line-opacity': 0.6 },
       });
 
+      // Neptune.in.ua raion-level air alerts — static boundary set, filter updated per poll.
+      map.addSource('neptun-raions', { type: 'geojson', data: '/raions.geojson' });
+      map.addLayer({ id: 'neptun-raion-fill', type: 'fill', source: 'neptun-raions',
+        filter: ['in', ['get', 'key'], ['literal', []]],
+        paint: { 'fill-color': '#FF1744', 'fill-opacity': 0.35 }
+      });
+      map.addLayer({ id: 'neptun-raion-outline', type: 'line', source: 'neptun-raions',
+        filter: ['in', ['get', 'key'], ['literal', []]],
+        paint: { 'line-color': '#FF1744', 'line-width': 1, 'line-opacity': 0.4 }
+      });
+
       // Frontline (DeepState/Militaryland) — occupied-zone fills + outlines. Uses
       // each feature's own DeepState style colors; fills sit under the dot/label
       // layers added below so markers stay legible.
@@ -2386,6 +2397,19 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
     map.setPaintProperty('pressure-oblast-fill', 'fill-opacity', opacityExpr);
   }, [mapReady, data.oblast_pressure, activeLayers.oblast_pressure, setGeo]);
 
+  // Neptune raion-level air alerts — binary fill using setFilter (not setData).
+  useEffect(() => {
+    if (!mapReady) return;
+    const map = mapRef.current;
+    if (!map?.getLayer('neptun-raion-fill')) return;
+    const keys: string[] =
+      activeLayers.neptun_raion_alerts && Array.isArray(data.neptun_alerts?.activeKeys)
+        ? data.neptun_alerts.activeKeys
+        : [];
+    map.setFilter('neptun-raion-fill',    ['in', ['get', 'key'], ['literal', keys]]);
+    map.setFilter('neptun-raion-outline', ['in', ['get', 'key'], ['literal', keys]]);
+  }, [mapReady, data.neptun_alerts, activeLayers.neptun_raion_alerts]);
+
   // KAB / glide-bomb threats (Telegram-derived, oblast-level point markers).
   useEffect(() => {
     if (!mapReady) return;
@@ -2661,6 +2685,7 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
     setVis(['drone-route-line','drone-route-arrows','drone-route-nodes','drone-route-label'], activeLayers.drone_threats);
     setVis(['missile-route-line','missile-route-arrows','missile-route-nodes','missile-route-label'], activeLayers.missile_threats);
     setVis(['alarm-vector-line','alarm-vector-arrow'], activeLayers.alarm_vectors);
+    setVis(['neptun-raion-fill','neptun-raion-outline'], activeLayers.neptun_raion_alerts);
     setVis(['ru-raid-glow','ru-raid-dots','ru-raid-label'], activeLayers.ru_air_raids);
     setVis(['thermal-aoi-glow','thermal-aoi-dots','thermal-aoi-label','thermal-aoi-unconfirmed-label'], activeLayers.thermal_aoi);
     setVis(['capture-glow','capture-dots'], activeLayers.captures);

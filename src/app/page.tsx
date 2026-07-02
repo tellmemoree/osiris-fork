@@ -236,6 +236,7 @@ export default function Dashboard() {
     drone_threats: false,
     missile_threats: false,
     alarm_vectors: false,
+    neptun_raion_alerts: false,
     missile_cruise:     true,
     missile_ballistic:  true,
     missile_kinzhal:    true,
@@ -562,6 +563,7 @@ export default function Dashboard() {
     malware: () => fetchEndpoint('/api/malware', d => ({ malware_threats: d.threats })),
     oblast_pressure: () => fetchEndpoint('/api/oblast-pressure', (d: any) => ({ oblast_pressure: d.oblasts ?? [] })),
     shadow_fleet_tracks: () => fetchEndpoint('/api/maritime?tracks=1', (d: any) => ({ shadow_fleet_tracks: d.tracks ?? [] })),
+    neptun_alerts: () => fetchEndpoint('/api/neptun-alerts', (d: any) => ({ neptun_alerts: { updatedAt: d?.updatedAt ?? null, activeKeys: Array.isArray(d?.activeKeys) ? d.activeKeys : [] } })),
   }), [fetchEndpoint]);
 
   // Fetch a source at most once (does NOT toggle the layer on).
@@ -631,6 +633,7 @@ export default function Dashboard() {
     if (activeLayers.malware) loadOnce('malware');
     if (activeLayers.oblast_pressure) loadOnce('oblast_pressure');
     if (activeLayers.shadow_fleet_tracks) loadOnce('shadow_fleet_tracks');
+    if (activeLayers.neptun_raion_alerts) loadOnce('neptun_alerts');
   }, [activeLayers, loadOnce]);
 
   // Background pre-fetch: populate LayerPanel counts for every layer
@@ -730,6 +733,9 @@ export default function Dashboard() {
     }
     if (activeLayers.malware) {
       intervals.push(setInterval(() => fetchEndpoint('/api/malware', d => ({ malware_threats: d.threats })), 900000)); // 15 min
+    }
+    if (activeLayers.neptun_raion_alerts) {
+      intervals.push(setInterval(() => fetchEndpoint('/api/neptun-alerts', (d: any) => ({ neptun_alerts: { updatedAt: d?.updatedAt ?? null, activeKeys: Array.isArray(d?.activeKeys) ? d.activeKeys : [] } })), 60000));
     }
     return () => intervals.forEach(clearInterval);
   }, [activeLayers, fetchEndpoint]);

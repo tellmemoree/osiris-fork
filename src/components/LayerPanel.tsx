@@ -105,6 +105,7 @@ const getLayerGroups = (theme: 'core' | 'ghost') => {
       { key: 'kab_threats', label: 'KAB / Glide-Bomb', icon: Bomb, color: '#FF6B00', dataKey: 'kab_threats' },
       { key: 'drone_threats', label: 'Drone / UAV Swarms', icon: Plane, color: '#CE93D8', dataKey: 'drone_threats' },
       { key: 'alarm_vectors', label: 'Wave Vectors (inferred)', icon: Activity, color: '#FF9800', dataKey: '' },
+      { key: 'neptun_raion_alerts', label: 'Raion Alerts (Neptune)', icon: Siren, color: '#FF6B6B', dataKey: '' },
       { key: 'missile_threats', label: 'Missile Threats', icon: Zap, color: '#FF4444', dataKey: 'missile_routes' },
       { key: 'power_outages', label: 'Power Outages', icon: Zap, color: '#FFD500', dataKey: 'power_outages' },
       { key: 'oblast_pressure', label: 'Oblast Pressure', icon: Activity, color: '#FF7043', dataKey: 'oblast_pressure' },
@@ -201,6 +202,10 @@ function LayerPanel({ data, activeLayers, setActiveLayers, isMobile, theme = 'co
         item.coords?.length === 2 && item.published &&
         new Date(item.published).getTime() >= cutoff
       ).length;
+      return n > 0 ? n : null;
+    }
+    if (layer.key === 'neptun_raion_alerts') {
+      const n = data.neptun_alerts?.activeKeys?.length ?? 0;
       return n > 0 ? n : null;
     }
     return getCount(layer.dataKey);

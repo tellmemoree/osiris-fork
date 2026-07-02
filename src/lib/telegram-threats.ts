@@ -21,6 +21,14 @@ export const UA_THREAT_CHANNELS = [
   'DeepStateUA', 'UkraineWarReport',
   'ua_forces', 'kpszsu', 'war_monitor',
   'vanek_nikolaev', // RU-language UA channel; uses "мопед" as Shahed alias
+  // Neptune.in.ua monitor set (2026-07) — real-time directional threat channels,
+  // @-stripped. kpszsu excluded (already above); region-news channels excluded.
+  'phantomche', 'shahedchernihiv', 'odessa_knight', 'radar_dnipra',
+  'radar_top_ua', 'radarraketppo', 'eradarrua', 'info_zp',
+  'kharkov_media', 'pivden_varta', 'horizon_of_war_official',
+  'povitryanatrivogaaa', 'ukrainealarmsignal', 'eyes_everywhere_ua',
+  'poltavaranger',
+  'mon1tor_ua', // user-requested addition
 ] as const;
 
 // Strike-report channels: post after-action summaries, not real-time threat alerts.
