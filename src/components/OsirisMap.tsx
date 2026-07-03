@@ -317,7 +317,7 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
       }
 
       // Sources
-      const sources = ['flights','military','jets','private-fl','satellites','earthquakes','gdelt','gps-jamming','day-night','cctv','fires','weather','infrastructure','maritime','maritime-choke','maritime-ships','live-news','sigint-news','conflict-zones', 'balloons', 'radiation', 'ip-sweep-devices', 'ip-sweep-pulse', 'ip-sweep-connections', 'scan-targets', 'sdk-entities', 'sdk-links', 'air-raid-alerts', 'power-outages', 'kab-threats', 'frontlines', 'frontline-delta', 'axis-focus', 'air-quality', 'ioda-outages', 'malware-nodes', 'thermal-aoi', 'captures', 'network-mesh', 'shadow-fleet-tracks', 'alarm-vectors'];
+      const sources = ['flights','military','jets','private-fl','satellites','earthquakes','gdelt','gps-jamming','day-night','cctv','fires','weather','infrastructure','maritime','maritime-choke','maritime-ships','live-news','sigint-news','conflict-zones', 'balloons', 'radiation', 'ip-sweep-devices', 'ip-sweep-pulse', 'ip-sweep-connections', 'scan-targets', 'sdk-entities', 'sdk-links', 'air-raid-alerts', 'power-outages', 'kab-threats', 'frontlines', 'frontline-delta', 'axis-focus', 'air-quality', 'ioda-outages', 'malware-nodes', 'thermal-aoi', 'captures', 'network-mesh', 'shadow-fleet-tracks', 'alarm-vectors', 'correlated-events'];
       sources.forEach(s => map.addSource(s, { type: 'geojson', data: EMPTY_FC }));
 
       // Warning icon generator (parameterized — eliminates 3x copy-paste)
@@ -1124,6 +1124,40 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
           'line-width': ['interpolate', ['linear'], ['zoom'], 1, 1, 8, 2.5],
           'line-dasharray': [2, 2],
           'line-opacity': ['interpolate', ['linear'], ['get', 'ageHours'], 0, 0.9, 24, 0.12],
+        },
+      });
+
+      // ── Correlated Events — multi-signal oblast correlation (ring + label) ──
+      // Pulse-style ring: alarm_confirmed = red (#FF1744), unconfirmed = orange (#FF6D00).
+      map.addLayer({
+        id: 'correlated-ring',
+        type: 'circle',
+        source: 'correlated-events',
+        paint: {
+          'circle-radius': 18,
+          'circle-color': ['case', ['boolean', ['get', 'alarm_confirmed'], false], '#FF1744', '#FF6D00'],
+          'circle-opacity': 0.25,
+          'circle-stroke-color': ['case', ['boolean', ['get', 'alarm_confirmed'], false], '#FF1744', '#FF6D00'],
+          'circle-stroke-width': 2,
+          'circle-stroke-opacity': 0.8,
+        },
+      });
+      map.addLayer({
+        id: 'correlated-label',
+        type: 'symbol',
+        source: 'correlated-events',
+        minzoom: 4,
+        layout: {
+          'text-field': ['get', 'oblast'],
+          'text-size': 9,
+          'text-font': ['Open Sans Regular'],
+          'text-offset': [0, 2.2],
+          'text-allow-overlap': false,
+        },
+        paint: {
+          'text-color': ['case', ['boolean', ['get', 'alarm_confirmed'], false], '#FF1744', '#FF6D00'],
+          'text-halo-color': '#000',
+          'text-halo-width': 1,
         },
       });
 
@@ -2532,6 +2566,24 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
     setGeo('alarm-vectors', features);
   }, [mapReady, data.alarm_vectors, activeLayers.alarm_vectors, setGeo]);
 
+  // Correlated Events — multi-signal oblast correlation layer.
+  useEffect(() => {
+    if (!mapReady) return;
+    const events: any[] = activeLayers.correlated_events && (data as any).correlated_events
+      ? (data as any).correlated_events
+      : [];
+    setGeo('correlated-events', events.filter((e: any) => e.lat != null && e.lng != null).map((e: any) => ({
+      type: 'Feature',
+      geometry: { type: 'Point', coordinates: [e.lng, e.lat] },
+      properties: {
+        alarm_confirmed: e.alarm_confirmed === true,
+        oblast: e.oblast ?? '',
+        match_tightness_min: e.match_tightness_min ?? 0,
+        signal_types: Array.isArray(e.signals) ? e.signals.map((s: any) => s.type).join(',') : '',
+      },
+    })));
+  }, [mapReady, data, activeLayers.correlated_events, setGeo]);
+
   // RU Oblast Alerts (Russian border oblast drone/strike incursions).
   useEffect(() => {
     if (!mapReady) return;
@@ -2668,6 +2720,7 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
     setVis(['pressure-oblast-fill','pressure-oblast-outline'], activeLayers.oblast_pressure);
     setVis(['shadow-track-line'], activeLayers.shadow_fleet_tracks);
     setVis(['aq-glow','aq-dots','aq-label'], activeLayers.air_quality);
+    setVis(['correlated-ring', 'correlated-label'], activeLayers.correlated_events);
   }, [mapReady, activeLayers, setVis]);
 
   // IP Sweep visualization

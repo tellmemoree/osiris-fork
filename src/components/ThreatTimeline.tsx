@@ -11,6 +11,7 @@ import type { CorrelatedEventsResponse, CorrelatedEvent, Signal } from '@/app/ap
 
 interface ThreatTimelineProps {
   show: boolean;
+  onLocate?: (lat: number, lng: number) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -52,7 +53,7 @@ function signalLabel(s: Signal): string {
 // Main component
 // ---------------------------------------------------------------------------
 
-export default function ThreatTimeline({ show }: ThreatTimelineProps) {
+export default function ThreatTimeline({ show, onLocate }: ThreatTimelineProps) {
   const [data, setData] = useState<CorrelatedEventsResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<boolean>(false);
@@ -193,9 +194,15 @@ export default function ThreatTimeline({ show }: ThreatTimelineProps) {
           {events.map((event: CorrelatedEvent, idx: number) => (
             <div
               key={event.oblast ?? idx}
+              onClick={() => {
+                if (onLocate && event.lat != null && event.lng != null) {
+                  onLocate(event.lat, event.lng);
+                }
+              }}
               style={{
                 borderTop: '1px solid rgba(255,255,255,0.05)',
                 padding: '8px 12px',
+                cursor: onLocate ? 'pointer' : 'default',
               }}
             >
               {/* Oblast + tightness */}
