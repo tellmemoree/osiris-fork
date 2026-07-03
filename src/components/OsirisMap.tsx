@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState, useCallback, memo } from 'react';
 import maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
+import { deadReckon, uncertaintyRadiusKm, uncertaintyRing } from '@/lib/dark-vessel-dr';
 
 // ── Popup XSS escaping ──
 // Map popups are assembled as raw HTML strings and injected via Popup.setHTML,
@@ -237,7 +238,7 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
       createDot(map, 'dot-cctv', cameraColor, 10);
 
       // Sources
-      const sources = ['flights','military','jets','private-fl','satellites','earthquakes','gdelt','gps-jamming','day-night','cctv','fires','weather','infrastructure','maritime','maritime-choke','maritime-ships','live-news','sigint-news','conflict-zones', 'balloons', 'radiation', 'ip-sweep-devices', 'ip-sweep-pulse', 'ip-sweep-connections', 'scan-targets', 'sdk-entities', 'sdk-links', 'air-raid-alerts', 'power-outages', 'kab-threats', 'frontlines', 'air-quality', 'ioda-outages', 'malware-nodes', 'thermal-aoi', 'captures', 'network-mesh'];
+      const sources = ['flights','military','jets','private-fl','satellites','earthquakes','gdelt','gps-jamming','day-night','cctv','fires','weather','infrastructure','maritime','maritime-choke','maritime-ships','live-news','sigint-news','conflict-zones', 'balloons', 'radiation', 'ip-sweep-devices', 'ip-sweep-pulse', 'ip-sweep-connections', 'scan-targets', 'sdk-entities', 'sdk-links', 'air-raid-alerts', 'power-outages', 'kab-threats', 'frontlines', 'air-quality', 'ioda-outages', 'malware-nodes', 'thermal-aoi', 'captures', 'network-mesh', 'dark-vessel-uncertainty', 'dark-vessel-dr'];
       sources.forEach(s => map.addSource(s, { type: 'geojson', data: EMPTY_FC }));
 
       // Warning icon generator (parameterized — eliminates 3x copy-paste)
@@ -896,6 +897,29 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
         'text-offset': [0, 1.4], 'text-allow-overlap': false,
       }, paint: { 'text-color': '#E040FB', 'text-halo-color': '#000', 'text-halo-width': 1 }});
 
+      // ── AIS Dark Vessel Dead-Reckoning layers ──
+      // Expanding uncertainty ring — fill fades out as elapsed time grows.
+      map.addLayer({ id: 'dark-vessel-uncertainty-fill', type: 'fill', source: 'dark-vessel-uncertainty', paint: {
+        'fill-color': '#E040FB',
+        'fill-opacity': ['interpolate', ['linear'], ['get', 'elapsedHours'], 0, 0.25, 6, 0.05],
+      }});
+      // Hollow circle marker for the DR estimated position.
+      map.addLayer({ id: 'dark-vessel-dr-point', type: 'circle', source: 'dark-vessel-dr', paint: {
+        'circle-radius': 6,
+        'circle-color': 'transparent',
+        'circle-stroke-color': '#E040FB',
+        'circle-stroke-width': 2,
+        'circle-opacity': 0.8,
+      }});
+      // "DR EST" text label above the DR point.
+      map.addLayer({ id: 'dark-vessel-dr-label', type: 'symbol', source: 'dark-vessel-dr', minzoom: 3, layout: {
+        'text-field': 'DR EST',
+        'text-size': 9,
+        'text-font': ['Open Sans Regular'],
+        'text-offset': [0, -1.4],
+        'text-allow-overlap': false,
+      }, paint: { 'text-color': '#E040FB', 'text-halo-color': '#000', 'text-halo-width': 1 }});
+
       // Hide disputed boundary lines from the Carto base style (e.g. dashed
       // line drawn between Crimea and mainland Ukraine). Regex catches any
       // variant name the CDN may use without hard-coding layer IDs.
@@ -1454,15 +1478,51 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
       const p = e.features[0].properties as any;
       const coords = (e.features[0].geometry as any).coordinates;
       const isShadow = p.shadow_fleet === true || p.shadow_fleet === 'true';
+      const isStale = p.stale === true || p.stale === 'true';
       const shipType = (p.type || 'cargo').toString();
       const color = isShadow ? '#E040FB' : shipType === 'military' ? '#FF1744' : shipType === 'tanker' ? '#FF9500' : '#00BCD4';
       const flagStr = p.flag_emoji ? `${esc(p.flag_emoji)} ${esc(p.flag || '')}`.trim() : esc(p.flag || '—');
+
+      // Dead-reckoning block for stale shadow vessels
+      let drHtml = '';
+      if (isShadow && isStale) {
+        const elapsedHours = (Number(p.minutes_since_update) || 0) / 60;
+        const blackoutTotalMin = Number(p.minutes_since_update) || 0;
+        const blackoutH = Math.floor(blackoutTotalMin / 60);
+        const blackoutM = Math.round(blackoutTotalMin % 60);
+        const blackoutStr = blackoutH > 0 ? `${blackoutH}h ${blackoutM}m` : `${blackoutM}m`;
+
+        const rawHeading = Number(p.heading);
+        const headingValid = Number.isFinite(rawHeading) && rawHeading !== 511 && rawHeading >= 0 && rawHeading < 360;
+        const rawSpeed = Number(p.speed);
+        const speed = rawSpeed > 0.1 ? rawSpeed : 8;
+
+        // Feature coords are [lng, lat]
+        const shipLat = coords[1];
+        const shipLng = coords[0];
+
+        if (elapsedHours > 0.17 && elapsedHours <= 6 && headingValid) {
+          const drPos = deadReckon(shipLat, shipLng, rawHeading, speed, elapsedHours);
+          if (drPos) {
+            const [drLat, drLng] = drPos;
+            drHtml = `<div style="background:rgba(224,64,251,0.08);border:1px solid rgba(224,64,251,0.3);border-radius:3px;padding:5px 6px;margin-top:5px;font-size:9px;color:#E040FB;">
+              DR EST · projected ~${drLat.toFixed(3)}°, ${drLng.toFixed(3)}° · blackout ${blackoutStr} · estimate only
+            </div>`;
+          }
+        } else if (elapsedHours > 0.17 && elapsedHours <= 6) {
+          // Heading unknown — show uncertainty ring exists but no position
+          drHtml = `<div style="background:rgba(224,64,251,0.08);border:1px solid rgba(224,64,251,0.3);border-radius:3px;padding:5px 6px;margin-top:5px;font-size:9px;color:#E040FB;">
+            DR EST · heading unknown — uncertainty ring only · blackout ${blackoutStr} · estimate only
+          </div>`;
+        }
+      }
+
       popup(coords, `<div style="${pStyle}border:1px solid ${color}40;">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;gap:8px;">
           <span style="color:${color};font-size:12px;font-weight:700;letter-spacing:0.1em;">🚢 ${esc(p.name)}</span>
           <span style="color:#aaa;font-size:11px;white-space:nowrap;">${flagStr}</span>
         </div>
-        ${isShadow ? `<div style="color:#E040FB;font-size:9px;font-weight:700;margin-bottom:4px;">⚠ SHADOW FLEET — sanctioned / dark vessel</div>${p.stale === true || p.stale === 'true' ? `<div style="color:#FF9500;font-size:9px;margin-bottom:6px;">📡 AIS-DARK · Last seen: <span style="color:#E8E6E0;">${p.last_position_at ? new Date(p.last_position_at).toUTCString().slice(5,22)+' UTC' : p.minutes_since_update+'m ago'}</span></div>` : ''}` : ''}
+        ${isShadow ? `<div style="color:#E040FB;font-size:9px;font-weight:700;margin-bottom:4px;">⚠ SHADOW FLEET — sanctioned / dark vessel</div>${isStale ? `<div style="color:#FF9500;font-size:9px;margin-bottom:6px;">📡 AIS-DARK · Last seen: <span style="color:#E8E6E0;">${p.last_position_at ? new Date(p.last_position_at).toUTCString().slice(5,22)+' UTC' : p.minutes_since_update+'m ago'}</span></div>` : ''}` : ''}
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;font-size:9px;">
           <div><span style="color:#5C5A54;">FLAG</span><br/><span style="color:#E8E6E0;">${flagStr}</span></div>
           <div><span style="color:#5C5A54;">TYPE</span><br/><span style="color:${color};">${esc(shipType.toUpperCase())}</span></div>
@@ -1470,6 +1530,7 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
           <div><span style="color:#5C5A54;">HEADING</span><br/><span style="color:#E8E6E0;">${esc(p.heading)}°</span></div>
           <div><span style="color:#5C5A54;">DEST</span><br/><span style="color:#E8E6E0;">${esc(p.destination) || 'UNKNOWN'}</span></div>
         </div>
+        ${drHtml}
         <button onclick="window.openOsirisIntel({ type: 'vessel', name: '${jsAttr(p.name)}', imo: '${jsAttr(p.imo||'')}', mmsi: '${jsAttr(p.mmsi||'')}', flag: '${jsAttr(p.flag||'')}', speed: ${Number(p.speed)||0}, destination: '${jsAttr(p.destination||'')}' })" style="width:100%;margin-top:8px;padding:6px 12px;background:${color}30;border:1px solid ${color}80;color:${color};font-family:'JetBrains Mono',monospace;font-size:10px;font-weight:bold;letter-spacing:0.1em;border-radius:4px;cursor:pointer;">[ VESSEL INTEL ]</button>
       </div>`);
     }));
@@ -1826,6 +1887,56 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
     setGeo('maritime-ships', (activeLayers.ships || activeLayers.shadow_fleet) && data.maritime_ships ? data.maritime_ships.filter((s: any) => Number.isFinite(s.lat) && Number.isFinite(s.lng) && Math.abs(s.lat) <= 90 && Math.abs(s.lng) <= 180 && !(s.lat === 0 && s.lng === 0)).map((s: any) => ({ type: 'Feature', geometry: { type: 'Point', coordinates: [s.lng, s.lat] }, properties: { name: s.name || s.mmsi?.toString(), type: s.type || 'cargo', speed: s.speed, heading: s.heading, destination: s.destination, flag: s.flag, flag_emoji: s.flag_emoji, shadow_fleet: s.shadow_fleet === true, stale: s.stale === true, minutes_since_update: s.minutes_since_update, last_position_at: s.last_position_at } })) : []);
   }, [mapReady, data.maritime_ports, data.maritime_chokepoints, data.maritime_ships, activeLayers.maritime, activeLayers.ships, activeLayers.shadow_fleet, setGeo]);
 
+  // ── AIS Dark Vessel Dead-Reckoning ──
+  // Runs client-side whenever ship data or DR toggle changes — no new API route needed.
+  useEffect(() => {
+    if (!mapReady) return;
+    const ships: any[] = data.maritime_ships || [];
+    const drPointFeatures: GeoJSON.Feature[] = [];
+    const drRingFeatures: GeoJSON.Feature[] = [];
+
+    if (activeLayers.dark_vessel_dr) {
+      for (const s of ships) {
+        if (!(s.shadow_fleet === true) || !(s.stale === true)) continue;
+        if (!Number.isFinite(s.lat) || !Number.isFinite(s.lng)) continue;
+        if (Math.abs(s.lat) > 90 || Math.abs(s.lng) > 180) continue;
+
+        const elapsedHours = (Number(s.minutes_since_update) || 0) / 60;
+        if (elapsedHours > 6 || elapsedHours < 0.17) continue;
+
+        // Heading: prefer heading, fall back to nothing (511 = NMEA sentinel)
+        const rawHeading = Number(s.heading);
+        const headingValid = Number.isFinite(rawHeading) && rawHeading !== 511 && rawHeading >= 0 && rawHeading < 360;
+
+        // Speed: use reported speed; if 0 or absent default to typical shadow tanker
+        const rawSpeed = Number(s.speed);
+        const speed = rawSpeed > 0.1 ? rawSpeed : 8;
+
+        const radius = uncertaintyRadiusKm(speed, elapsedHours);
+        const name = s.name || s.mmsi?.toString() || 'UNKNOWN';
+
+        // Uncertainty ring always shown (even without a valid heading)
+        drRingFeatures.push(uncertaintyRing(s.lat, s.lng, radius, { elapsedHours, mmsi: s.mmsi, name }));
+
+        // DR point only when heading is valid
+        if (headingValid) {
+          const drPos = deadReckon(s.lat, s.lng, rawHeading, speed, elapsedHours);
+          if (drPos) {
+            const [drLat, drLng] = drPos;
+            drPointFeatures.push({
+              type: 'Feature',
+              geometry: { type: 'Point', coordinates: [drLng, drLat] },
+              properties: { mmsi: s.mmsi, name, elapsedHours, isDR: true },
+            });
+          }
+        }
+      }
+    }
+
+    setGeo('dark-vessel-uncertainty', drRingFeatures);
+    setGeo('dark-vessel-dr', drPointFeatures);
+  }, [mapReady, data.maritime_ships, activeLayers.dark_vessel_dr, setGeo]);
+
   useEffect(() => {
     if (!mapReady) return;
     setGeo('balloons', activeLayers.balloons && data.balloons ? data.balloons.map((b: any) => ({ type: 'Feature', geometry: { type: 'Point', coordinates: [b.lng, b.lat] }, properties: { callsign: b.callsign, type: b.type, status: b.status, altitude: b.altitude, speed: b.speed, verticalRate: b.verticalRate, temperature: b.temperature, color: b.color } })) : []);
@@ -2111,6 +2222,7 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
     setVis(['choke-glow','choke-dots','choke-label'], activeLayers.maritime);
     setVis(['ship-dots','ship-label'], activeLayers.ships);
     setVis(['ship-shadow-dots','ship-shadow-label'], activeLayers.shadow_fleet);
+    setVis(['dark-vessel-uncertainty-fill','dark-vessel-dr-point','dark-vessel-dr-label'], activeLayers.dark_vessel_dr);
     setVis(['news-glow','news-dots','news-label'], activeLayers.live_news);
     setVis(['sigint-news-glow','sigint-news-dots','sigint-news-label'], activeLayers.news_intel);
     setVis(['conflict-icons'], true); // conflict-icons are always-on — no user toggle
