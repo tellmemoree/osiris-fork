@@ -216,6 +216,7 @@ export default function Dashboard() {
     ships: true,
     shadow_fleet: false,
     shadow_fleet_tracks: false,
+    dark_vessel_dr: false,
     satellites: false,
     balloons: false,
     cctv: true,
@@ -629,7 +630,7 @@ export default function Dashboard() {
     if (activeLayers.satellites) loadOnce('satellites');
     if (activeLayers.fires) loadOnce('fires');
     if (activeLayers.cctv) loadOnce('cctv');
-    if (activeLayers.maritime || activeLayers.ships || activeLayers.shadow_fleet) loadOnce('maritime');
+    if (activeLayers.maritime || activeLayers.ships || activeLayers.shadow_fleet || activeLayers.dark_vessel_dr) loadOnce('maritime');
     if (activeLayers.balloons) loadOnce('balloons');
     if (activeLayers.radiation) loadOnce('radiation');
     if (activeLayers.live_news) loadOnce('live_news');
@@ -703,7 +704,7 @@ export default function Dashboard() {
     if (activeLayers.radiation) {
       intervals.push(setInterval(() => fetchEndpoint('/api/radiation', d => ({ radiation: d.stations })), 300000)); // 5m
     }
-    if (activeLayers.maritime || activeLayers.ships || activeLayers.shadow_fleet) {
+    if (activeLayers.maritime || activeLayers.ships || activeLayers.shadow_fleet || activeLayers.dark_vessel_dr) {
       intervals.push(setInterval(() => fetchEndpoint('/api/maritime', (d: any) => { if (d.ais_status) setAisStatus(d.ais_status); return { maritime_ports: d.ports, maritime_chokepoints: d.chokepoints, maritime_ships: d.ships }; }), 10000)); // 10s
     }
     if (activeLayers.air_raids) {
