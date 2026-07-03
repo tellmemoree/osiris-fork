@@ -13,6 +13,18 @@ interface ChangeData {
   note?: string;
 }
 
+interface DeltaPatch {
+  area_km2: number;
+  direction: 'ru_gain' | 'ua_gain';
+}
+
+interface DeltaData {
+  ru_gain: { type: string; features: { properties: DeltaPatch }[] };
+  ua_gain: { type: string; features: { properties: DeltaPatch }[] };
+  actual_compare_date: string | null;
+  compare_date: string;
+}
+
 function Delta({ label, v }: { label: string; v: number | null }) {
   if (v === null || v === undefined) {
     return (
@@ -39,8 +51,24 @@ function Delta({ label, v }: { label: string; v: number | null }) {
   );
 }
 
+/** Find the largest patch across RU or UA gain features. */
+function hottestPatch(delta: DeltaData | null): { direction: 'ru_gain' | 'ua_gain'; area_km2: number } | null {
+  if (!delta) return null;
+  let best: { direction: 'ru_gain' | 'ua_gain'; area_km2: number } | null = null;
+  for (const f of (delta.ru_gain?.features || [])) {
+    const a = f.properties?.area_km2 ?? 0;
+    if (!best || a > best.area_km2) best = { direction: 'ru_gain', area_km2: a };
+  }
+  for (const f of (delta.ua_gain?.features || [])) {
+    const a = f.properties?.area_km2 ?? 0;
+    if (!best || a > best.area_km2) best = { direction: 'ua_gain', area_km2: a };
+  }
+  return best;
+}
+
 export default function FrontlineTracker({ isMobile = false }: { isMobile?: boolean }) {
   const [d, setD] = useState<ChangeData | null>(null);
+  const [delta, setDelta] = useState<DeltaData | null>(null);
   const [failed, setFailed] = useState(false);
 
   useEffect(() => {
@@ -65,8 +93,29 @@ export default function FrontlineTracker({ isMobile = false }: { isMobile?: bool
     };
   }, []);
 
+  // Fetch directional delta for hottest-axis display
+  useEffect(() => {
+    let alive = true;
+    const load = () =>
+      fetch('/api/frontlines?delta=7', { cache: 'no-store' })
+        .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
+        .then((j: DeltaData) => {
+          if (alive) setDelta(j);
+        })
+        .catch(() => { /* silently ignore — delta is optional */ });
+    load();
+    const iv = setInterval(load, 3_600_000); // hourly
+    return () => {
+      alive = false;
+      clearInterval(iv);
+    };
+  }, []);
+
   if (failed && !d) return null;
   if (!d) return null;
+
+  const hottest = hottestPatch(delta);
+  const compareDate = delta?.actual_compare_date || delta?.compare_date || null;
 
   return (
     <div
@@ -91,10 +140,27 @@ export default function FrontlineTracker({ isMobile = false }: { isMobile?: bool
         <Delta label={d.since_date ? `vs ${d.since_date}` : '7d'} v={d.delta_7d} />
       </div>
 
+      {/* Hottest axis: largest directional patch in the 7-day delta */}
+      {hottest && (
+        <div className="mt-2.5 border-t border-white/10 pt-2">
+          <div className="text-[9px] text-white/30 mb-1 uppercase tracking-widest">Hottest axis</div>
+          <div
+            className="flex items-center gap-1.5 text-[11px] font-mono tabular-nums font-semibold"
+            style={{ color: hottest.direction === 'ru_gain' ? '#FF3D00' : '#1565C0' }}
+          >
+            {hottest.direction === 'ru_gain' ? '▲ RU' : '▼ UA'}
+            <span className="font-normal text-white/50">+{hottest.area_km2.toLocaleString()} km²</span>
+          </div>
+          {compareDate && (
+            <div className="text-[9px] text-white/25 mt-0.5">vs {compareDate} · DeepState</div>
+          )}
+        </div>
+      )}
+
       {d.note && <div className="mt-2 text-[10px] leading-snug text-white/35">{d.note}</div>}
 
       <div className="mt-2.5 border-t border-white/10 pt-2 text-[9px] leading-snug text-white/30">
-        ▲ RU expansion · ▼ contraction · DeepState
+        ▲ RU expansion · ▼ contraction · DeepState assessment
       </div>
     </div>
   );

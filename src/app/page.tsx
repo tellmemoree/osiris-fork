@@ -439,7 +439,16 @@ export default function Dashboard() {
     drone_threats: () => fetchEndpoint('/api/drone-threats', d => ({ drone_threats: d.threats, drone_waves: d.waves })),
     missile_threats: () => fetchEndpoint('/api/missile-threats', d => ({ missile_routes: d.routes })),
     ru_air_raids: () => fetchEndpoint('/api/ru-air-raids', d => ({ ru_air_raids: d.events })),
-    frontlines: () => fetchEndpoint('/api/frontlines', d => ({ frontlines: d.frontlines?.features || [] })),
+    frontlines: () => {
+      // Fetch current frontline overlay
+      fetchEndpoint('/api/frontlines', d => ({ frontlines: d.frontlines?.features || [] }));
+      // Fetch directional 7-day delta (RU gain / UA gain)
+      fetchEndpoint('/api/frontlines?delta=7', d => ({
+        frontline_ru_gain: d.ru_gain?.features || [],
+        frontline_ua_gain: d.ua_gain?.features || [],
+        frontline_delta_compare_date: d.actual_compare_date || d.compare_date || null,
+      }));
+    },
     captures: () => fetchEndpoint('/api/captures', d => ({ captures: d.captures })),
     air_quality: () => fetchEndpoint('/api/air-quality', d => ({ air_quality: d.stations })),
     thermal_aoi: () => fetchEndpoint('/api/strategic-thermal', d => ({ thermal_aoi: d.aois })),
@@ -563,6 +572,11 @@ export default function Dashboard() {
     }
     if (activeLayers.frontlines) {
       intervals.push(setInterval(() => fetchEndpoint('/api/frontlines', d => ({ frontlines: d.frontlines?.features || [] })), 1800000)); // 30 min
+      intervals.push(setInterval(() => fetchEndpoint('/api/frontlines?delta=7', d => ({
+        frontline_ru_gain: d.ru_gain?.features || [],
+        frontline_ua_gain: d.ua_gain?.features || [],
+        frontline_delta_compare_date: d.actual_compare_date || d.compare_date || null,
+      })), 1800000)); // 30 min
     }
     if (activeLayers.air_quality) {
       intervals.push(setInterval(() => fetchEndpoint('/api/air-quality', d => ({ air_quality: d.stations })), 3600000)); // 1 h

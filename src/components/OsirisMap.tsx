@@ -237,7 +237,7 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
       createDot(map, 'dot-cctv', cameraColor, 10);
 
       // Sources
-      const sources = ['flights','military','jets','private-fl','satellites','earthquakes','gdelt','gps-jamming','day-night','cctv','fires','weather','infrastructure','maritime','maritime-choke','maritime-ships','live-news','sigint-news','conflict-zones', 'balloons', 'radiation', 'ip-sweep-devices', 'ip-sweep-pulse', 'ip-sweep-connections', 'scan-targets', 'sdk-entities', 'sdk-links', 'air-raid-alerts', 'power-outages', 'kab-threats', 'frontlines', 'air-quality', 'ioda-outages', 'malware-nodes', 'thermal-aoi', 'captures', 'network-mesh'];
+      const sources = ['flights','military','jets','private-fl','satellites','earthquakes','gdelt','gps-jamming','day-night','cctv','fires','weather','infrastructure','maritime','maritime-choke','maritime-ships','live-news','sigint-news','conflict-zones', 'balloons', 'radiation', 'ip-sweep-devices', 'ip-sweep-pulse', 'ip-sweep-connections', 'scan-targets', 'sdk-entities', 'sdk-links', 'air-raid-alerts', 'power-outages', 'kab-threats', 'frontlines', 'frontline-ru-gain', 'frontline-ua-gain', 'air-quality', 'ioda-outages', 'malware-nodes', 'thermal-aoi', 'captures', 'network-mesh'];
       sources.forEach(s => map.addSource(s, { type: 'geojson', data: EMPTY_FC }));
 
       // Warning icon generator (parameterized — eliminates 3x copy-paste)
@@ -341,6 +341,20 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
         paint: { 'fill-color': ['coalesce', ['get', 'fill'], '#FF3D3D'], 'fill-opacity': 0.18 }});
       map.addLayer({ id: 'frontline-line', type: 'line', source: 'frontlines',
         paint: { 'line-color': ['coalesce', ['get', 'stroke'], '#FF3D3D'], 'line-width': 1.4, 'line-opacity': 0.85 }});
+
+      // Directional frontline delta — 7-day gain/loss patches (DeepState boolean diff).
+      // RU gain (#FF3D00 orange-red, distinct from occupied #FF3D3D) — Russian advance zones.
+      // UA gain (#1565C0 blue) — Ukrainian recovery zones.
+      map.addLayer({ id: 'frontline-ru-gain-fill', type: 'fill', source: 'frontline-ru-gain',
+        filter: ['match', ['geometry-type'], ['Polygon', 'MultiPolygon'], true, false],
+        paint: { 'fill-color': '#FF3D00', 'fill-opacity': 0.38 }});
+      map.addLayer({ id: 'frontline-ru-gain-line', type: 'line', source: 'frontline-ru-gain',
+        paint: { 'line-color': '#FF3D00', 'line-width': 1.8, 'line-opacity': 0.9 }});
+      map.addLayer({ id: 'frontline-ua-gain-fill', type: 'fill', source: 'frontline-ua-gain',
+        filter: ['match', ['geometry-type'], ['Polygon', 'MultiPolygon'], true, false],
+        paint: { 'fill-color': '#1565C0', 'fill-opacity': 0.38 }});
+      map.addLayer({ id: 'frontline-ua-gain-line', type: 'line', source: 'frontline-ua-gain',
+        paint: { 'line-color': '#1565C0', 'line-width': 1.8, 'line-opacity': 0.9 }});
 
       // Air quality (Open-Meteo) — PM2.5 station dots, colored by AQI band.
       map.addLayer({ id: 'aq-glow', type: 'circle', source: 'air-quality', paint: {
@@ -1607,6 +1621,32 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
     map.on('mouseenter', 'frontline-fill', () => { map.getCanvas().style.cursor = 'pointer'; });
     map.on('mouseleave', 'frontline-fill', () => { map.getCanvas().style.cursor = ''; });
 
+    // ── Frontline delta gain patches — click for direction + area + compare date ──
+    const onDeltaClick = (direction: 'ru_gain' | 'ua_gain') => (e: any) => {
+      if (!e.features?.length) return;
+      const p = e.features[0].properties as any;
+      const { lngLat } = e;
+      const isRu = direction === 'ru_gain';
+      const color = isRu ? '#FF3D00' : '#1565C0';
+      const label = isRu ? 'RU ADVANCE' : 'UA RECOVERY';
+      const icon = isRu ? '🔴' : '🔵';
+      const areaKm2 = p.area_km2 ? `${Number(p.area_km2).toLocaleString()} km²` : '—';
+      const compareDate = p.compare_date || '—';
+
+      popup([lngLat.lng, lngLat.lat], `<div style="${pStyle}border:1px solid ${color}40;min-width:220px;">
+        <div style="color:${color};font-size:13px;font-weight:700;letter-spacing:0.08em;">${icon} ${label}</div>
+        <div style="margin-top:6px;font-size:11px;color:#ccc;">Patch area: <strong style="color:${color};">${areaKm2}</strong></div>
+        <div style="margin-top:4px;font-size:10px;color:#aaa;">7-day delta · DeepState assessment</div>
+        <div style="margin-top:8px;font-size:9px;color:#5C5A54;">${lngLat.lat.toFixed(3)}°N ${lngLat.lng.toFixed(3)}°E</div>
+      </div>`);
+    };
+    map.on('click', 'frontline-ru-gain-fill', onDeltaClick('ru_gain'));
+    map.on('click', 'frontline-ua-gain-fill', onDeltaClick('ua_gain'));
+    map.on('mouseenter', 'frontline-ru-gain-fill', () => { map.getCanvas().style.cursor = 'pointer'; });
+    map.on('mouseleave', 'frontline-ru-gain-fill', () => { map.getCanvas().style.cursor = ''; });
+    map.on('mouseenter', 'frontline-ua-gain-fill', () => { map.getCanvas().style.cursor = 'pointer'; });
+    map.on('mouseleave', 'frontline-ua-gain-fill', () => { map.getCanvas().style.cursor = ''; });
+
     return () => { map.remove(); mapRef.current = null; };
   }, []);
 
@@ -1670,6 +1710,14 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
     if (!mapReady) return;
     setGeo('frontlines', activeLayers.frontlines && data.frontlines ? data.frontlines : []);
   }, [mapReady, data.frontlines, activeLayers.frontlines, setGeo]);
+
+  // Directional frontline delta — RU gain (orange-red) / UA gain (blue) patches.
+  useEffect(() => {
+    if (!mapReady) return;
+    const active = activeLayers.frontlines;
+    setGeo('frontline-ru-gain', active && data.frontline_ru_gain ? data.frontline_ru_gain : []);
+    setGeo('frontline-ua-gain', active && data.frontline_ua_gain ? data.frontline_ua_gain : []);
+  }, [mapReady, data.frontline_ru_gain, data.frontline_ua_gain, activeLayers.frontlines, setGeo]);
 
   useEffect(() => {
     if (!mapReady) return;
@@ -2131,6 +2179,7 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
     setVis(['thermal-aoi-glow','thermal-aoi-dots','thermal-aoi-label','thermal-aoi-unconfirmed-label'], activeLayers.thermal_aoi);
     setVis(['capture-glow','capture-dots'], activeLayers.captures);
     setVis(['frontline-fill','frontline-line'], activeLayers.frontlines);
+    setVis(['frontline-ru-gain-fill','frontline-ru-gain-line','frontline-ua-gain-fill','frontline-ua-gain-line'], activeLayers.frontlines);
   }, [mapReady, activeLayers, setVis]);
 
   // IP Sweep visualization

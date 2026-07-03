@@ -10,6 +10,10 @@
   },
   "dependencies": {
     "@google/generative-ai": "^0.24.1",
+    "@turf/area": "^7.3.5",
+    "@turf/boolean-valid": "^7.3.5",
+    "@turf/difference": "^7.3.5",
+    "@turf/union": "^7.3.5",
     "@vercel/analytics": "^2.0.1",
     "framer-motion": "^12.38.0",
     "google-libphonenumber": "^3.2.44",
