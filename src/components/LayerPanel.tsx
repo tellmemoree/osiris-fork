@@ -5,7 +5,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
   Plane, Satellite, Activity, Sun, AlertTriangle, Camera, Flame, Target,
   CloudLightning, Radiation, Tv, Anchor, Ship, Newspaper,
-  Network, Share2, Radio, Siren, Bomb, Zap, GitMerge
+  Network, Share2, Radio, Siren, Bomb, Zap, GitMerge, Train
 } from 'lucide-react';
 
 interface LayerPanelProps {
@@ -92,6 +92,8 @@ const getLayerGroups = (theme: 'core' | 'ghost') => {
       { key: 'infrastructure', label: 'Nuclear Facilities', icon: Radiation, color: '#76FF03', dataKey: 'infrastructure' },
       { key: 'global_incidents', label: 'Global Incidents', icon: AlertTriangle, color: '#FF3D3D', dataKey: 'gdelt' },
       { key: 'gps_jamming', label: 'GPS Jamming', icon: Radio, color: '#FF4444', dataKey: 'gps_jamming' },
+      { key: 'railway_network', label: 'Rail Network', icon: Train, color: '#78909C', dataKey: '' },
+      { key: 'railway_incidents', label: 'Rail Strikes', icon: Train, color: '#FF5722', dataKey: 'railway_incidents_geo' },
     ],
   },
   {
