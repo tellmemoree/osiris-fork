@@ -198,6 +198,8 @@ export default function Dashboard() {
     thermal_aoi_fires_only: false,
     internet_outages: false,
     malware: false,
+    railway_network: false,
+    railway_incidents: false,
   });
   // Persist active layer toggles across restarts — read on mount, write on every change.
   // Skip the first write (count=1, initial defaults) so we don't overwrite saved state
@@ -445,6 +447,7 @@ export default function Dashboard() {
     thermal_aoi: () => fetchEndpoint('/api/strategic-thermal', d => ({ thermal_aoi: d.aois })),
     internet_outages: () => fetchEndpoint('/api/radar', d => ({ ioda_outages: d.outages })),
     malware: () => fetchEndpoint('/api/malware', d => ({ malware_threats: d.threats })),
+    railway_incidents: () => fetchEndpoint('/api/railway-incidents', d => ({ railway_incidents_geo: d.features || [] })),
   }), [fetchEndpoint]);
 
   // Fetch a source at most once (does NOT toggle the layer on).
@@ -494,6 +497,7 @@ export default function Dashboard() {
     if (activeLayers.thermal_aoi) loadOnce('thermal_aoi');
     if (activeLayers.internet_outages) loadOnce('internet_outages');
     if (activeLayers.malware) loadOnce('malware');
+    if ((activeLayers as any).railway_incidents) loadOnce('railway_incidents');
   }, [activeLayers, loadOnce]);
 
   // Background pre-fetch: populate LayerPanel counts for every layer
@@ -575,6 +579,9 @@ export default function Dashboard() {
     }
     if (activeLayers.global_incidents) {
       intervals.push(setInterval(() => fetchEndpoint('/api/gdelt', d => ({ gdelt: d.events })), 300000)); // 5 min
+    }
+    if ((activeLayers as any).railway_incidents) {
+      intervals.push(setInterval(() => fetchEndpoint('/api/railway-incidents', d => ({ railway_incidents_geo: d.features || [] })), 300000)); // 5 min
     }
     return () => intervals.forEach(clearInterval);
   }, [activeLayers, fetchEndpoint]);

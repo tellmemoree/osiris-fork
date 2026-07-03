@@ -84,6 +84,20 @@ const OBLAST_MATCHERS = OBLAST_REFS.map((ref) => ({
   ),
 }));
 
+// ── railway / rail infrastructure patterns ───────────────────────────────────
+
+export const RAILWAY_PATTERNS: RegExp[] = [
+  /вокзал/iu,                      // station (terminal building)
+  /залізниц/iu,                    // railway / railroad
+  /залізничн/iu,                   // railway (adjective)
+  /залізнодорожн/iu,               // railroad (adj, alternative spelling)
+  /депо/iu,                        // rail depot
+  /потяг|поїзд/iu,                 // train
+  /локомотив/iu,                   // locomotive
+  /рейки/iu,                       // rail tracks
+  /railway|rail[\s-]?strike|rail[\s-]?attack/i,
+];
+
 // ── weapon vocab ─────────────────────────────────────────────────────────────
 
 // KAB patterns copied verbatim from kab-threats/route.ts.

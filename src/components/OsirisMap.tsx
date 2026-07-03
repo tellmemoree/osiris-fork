@@ -237,8 +237,11 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
       createDot(map, 'dot-cctv', cameraColor, 10);
 
       // Sources
-      const sources = ['flights','military','jets','private-fl','satellites','earthquakes','gdelt','gps-jamming','day-night','cctv','fires','weather','infrastructure','maritime','maritime-choke','maritime-ships','live-news','sigint-news','conflict-zones', 'balloons', 'radiation', 'ip-sweep-devices', 'ip-sweep-pulse', 'ip-sweep-connections', 'scan-targets', 'sdk-entities', 'sdk-links', 'air-raid-alerts', 'power-outages', 'kab-threats', 'frontlines', 'air-quality', 'ioda-outages', 'malware-nodes', 'thermal-aoi', 'captures', 'network-mesh'];
+      const sources = ['flights','military','jets','private-fl','satellites','earthquakes','gdelt','gps-jamming','day-night','cctv','fires','weather','infrastructure','maritime','maritime-choke','maritime-ships','live-news','sigint-news','conflict-zones', 'balloons', 'radiation', 'ip-sweep-devices', 'ip-sweep-pulse', 'ip-sweep-connections', 'scan-targets', 'sdk-entities', 'sdk-links', 'air-raid-alerts', 'power-outages', 'kab-threats', 'frontlines', 'air-quality', 'ioda-outages', 'malware-nodes', 'thermal-aoi', 'captures', 'network-mesh', 'railway-incidents'];
       sources.forEach(s => map.addSource(s, { type: 'geojson', data: EMPTY_FC }));
+
+      // Static rail network — loaded directly from public/ukraine-railways.geojson (ODbL)
+      map.addSource('ukraine-rail', { type: 'geojson', data: '/ukraine-railways.geojson' });
 
       // Warning icon generator (parameterized — eliminates 3x copy-paste)
       const createWarningIcon = (id: string, color: string) => {
@@ -896,6 +899,53 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
         'text-offset': [0, 1.4], 'text-allow-overlap': false,
       }, paint: { 'text-color': '#E040FB', 'text-halo-color': '#000', 'text-halo-width': 1 }});
 
+      // ══ UKRAINE RAIL NETWORK — static from public/ukraine-railways.geojson (ODbL) ══
+      map.addLayer({
+        id:     'rail-network-line',
+        type:   'line',
+        source: 'ukraine-rail',
+        paint: {
+          'line-color':   '#78909C',
+          'line-width':   ['interpolate', ['linear'], ['zoom'], 4, 0.5, 8, 1.5],
+          'line-opacity': 0.7,
+        },
+      });
+
+      // ══ RAILWAY STRIKE INCIDENTS — Telegram-derived, oblast-level precision ══
+      map.addLayer({
+        id:     'rail-strike-dots',
+        type:   'circle',
+        source: 'railway-incidents',
+        paint: {
+          'circle-radius':       6,
+          'circle-color':        '#FF5722',
+          'circle-opacity':      0.9,
+          'circle-stroke-width': 1.5,
+          'circle-stroke-color': '#000',
+          'circle-stroke-opacity': 0.7,
+        },
+      });
+      map.addLayer({
+        id:     'rail-strike-label',
+        type:   'symbol',
+        source: 'railway-incidents',
+        minzoom: 5,
+        layout: {
+          'text-field':        ['get', 'source'],
+          'text-size':         9,
+          'text-font':         ['Open Sans Regular'],
+          'text-offset':       [0, 1.6],
+          'text-max-width':    12,
+          'text-allow-overlap': false,
+        },
+        paint: {
+          'text-color':       '#FF5722',
+          'text-halo-color':  '#000',
+          'text-halo-width':  1,
+          'text-opacity':     0.85,
+        },
+      });
+
       // Hide disputed boundary lines from the Carto base style (e.g. dashed
       // line drawn between Crimea and mainland Ukraine). Regex catches any
       // variant name the CDN may use without hard-coding layer IDs.
@@ -1344,8 +1394,31 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
       });
     });
 
+    // ── Railway Strike Incidents popup ──
+    map.on('click', 'rail-strike-dots', e => {
+      if (!e.features?.length) return;
+      const p      = e.features[0].properties as any;
+      const coords = (e.features[0].geometry as any).coordinates;
+      const date   = p.pubDate ? new Date(p.pubDate).toUTCString().replace('GMT', 'Z') : '—';
+      popup(coords, `<div style="${pStyle}border:1px solid rgba(255,87,34,0.4);">
+        <div style="display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid rgba(255,87,34,0.3);padding-bottom:6px;margin-bottom:8px;">
+          <div style="color:#FF5722;font-size:12px;font-weight:700;letter-spacing:0.08em;">🚆 RAIL INFRASTRUCTURE REPORT</div>
+          <div style="color:#FF5722;font-size:8px;border:1px solid rgba(255,87,34,0.4);border-radius:3px;padding:1px 5px;">UNVERIFIED</div>
+        </div>
+        <div style="font-size:10px;color:#E8E6E0;line-height:1.5;margin-bottom:8px;">${esc((p.text || '').slice(0, 150))}</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;font-size:9px;margin-bottom:8px;">
+          <div><span style="color:#5C5A54;">REGION</span><br/><span style="color:#FF5722;">${esc(p.oblast || '—')}</span></div>
+          <div><span style="color:#5C5A54;">SOURCE</span><br/><span style="color:#E8E6E0;">t.me/${esc(p.source || '—')}</span></div>
+          <div style="grid-column:1/-1;"><span style="color:#5C5A54;">REPORTED</span><br/><span style="color:#E8E6E0;">${esc(date)}</span></div>
+        </div>
+        <div style="font-size:8px;color:#FF5722;border:1px solid rgba(255,87,34,0.25);border-radius:4px;padding:5px 8px;line-height:1.4;">
+          ⚠ telegram-only / unverified &nbsp;·&nbsp; oblast-level precision — not an exact station location.
+        </div>
+      </div>`);
+    });
+
     // ── Generic hover for clickables ──
-    ['conflict-icons','cctv-dots','eq-circles','sat-dots','fires-heat','gdelt-dots','weather-dots','infra-dots','maritime-dots','choke-dots','news-dots','sigint-news-dots','balloon-dots','rad-dots','ship-dots','ship-shadow-dots','sweep-device-dots','scan-targets-dots','sdk-sea','sdk-sea-glow','sdk-sea-atmo','sdk-air','sdk-air-glow','sdk-air-atmo','sdk-intel','sdk-intel-glow','sdk-intel-atmo','raid-dots','outage-dots','kab-dots','drone-route-nodes','missile-route-nodes','ru-raid-dots','malware-dots','ioda-dots'].forEach(layer => {
+    ['conflict-icons','cctv-dots','eq-circles','sat-dots','fires-heat','gdelt-dots','weather-dots','infra-dots','maritime-dots','choke-dots','news-dots','sigint-news-dots','balloon-dots','rad-dots','ship-dots','ship-shadow-dots','sweep-device-dots','scan-targets-dots','sdk-sea','sdk-sea-glow','sdk-sea-atmo','sdk-air','sdk-air-glow','sdk-air-atmo','sdk-intel','sdk-intel-glow','sdk-intel-atmo','raid-dots','outage-dots','kab-dots','drone-route-nodes','missile-route-nodes','ru-raid-dots','malware-dots','ioda-dots','rail-strike-dots'].forEach(layer => {
       map.on('mouseenter', layer, () => { map.getCanvas().style.cursor = 'pointer'; });
       map.on('mouseleave', layer, () => { map.getCanvas().style.cursor = ''; });
     });
@@ -2087,6 +2160,17 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
     setGeo('conflict-zones', conflictFeatures);
   }, [mapReady, setGeo]);
 
+  // Railway Incidents — GeoJSON FeatureCollection from /api/railway-incidents
+  useEffect(() => {
+    if (!mapReady) return;
+    if (!activeLayers.railway_incidents) {
+      setGeo('railway-incidents', []);
+      return;
+    }
+    const d = (data as any).railway_incidents_geo;
+    if (!d || !Array.isArray(d)) { setGeo('railway-incidents', []); return; }
+    setGeo('railway-incidents', d);
+  }, [mapReady, (activeLayers as any).railway_incidents, (data as any).railway_incidents_geo, setGeo]);
 
   // Visibility
   useEffect(() => {
@@ -2131,6 +2215,8 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
     setVis(['thermal-aoi-glow','thermal-aoi-dots','thermal-aoi-label','thermal-aoi-unconfirmed-label'], activeLayers.thermal_aoi);
     setVis(['capture-glow','capture-dots'], activeLayers.captures);
     setVis(['frontline-fill','frontline-line'], activeLayers.frontlines);
+    setVis(['rail-network-line'], activeLayers.railway_network);
+    setVis(['rail-strike-dots','rail-strike-label'], activeLayers.railway_incidents);
   }, [mapReady, activeLayers, setVis]);
 
   // IP Sweep visualization
@@ -2326,7 +2412,17 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
     }
   }, [mapReady, mapStyle]);
 
-  return <div ref={containerRef} className="absolute inset-0 w-full h-full" />;
+  return (
+    <div className="absolute inset-0 w-full h-full">
+      <div ref={containerRef} className="absolute inset-0 w-full h-full" />
+      {/* OSM attribution required by ODbL for ukraine-railways.geojson */}
+      <div className="absolute bottom-1 right-1 z-10 pointer-events-none"
+        style={{ fontSize: '9px', fontFamily: 'monospace', color: 'rgba(255,255,255,0.35)', background: 'rgba(0,0,0,0.45)', padding: '1px 5px', borderRadius: '3px' }}>
+        © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer"
+          style={{ color: 'rgba(255,255,255,0.45)', pointerEvents: 'auto' }}>OpenStreetMap contributors</a> (ODbL)
+      </div>
+    </div>
+  );
 }
 
 export default memo(OsirisMap);
