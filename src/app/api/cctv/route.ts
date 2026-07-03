@@ -64,7 +64,7 @@ async function fetchTfLCameras(): Promise<Camera[]> {
 // ── US-WEST: WSDOT Washington State (~500) ──
 async function fetchWSDOTCameras(): Promise<Camera[]> {
   try {
-    const res = await stealthFetch('https://data.wsdot.wa.gov/log/public/cameras.json', { signal: AbortSignal.timeout(10000) });
+    const res = await stealthFetch('https://data.wsdot.wa.gov/log/public/cameras.json', { signal: AbortSignal.timeout(6000) });
     if (!res.ok) return [];
     const data = await res.json();
     return (data || []).map((cam: { CameraID?: string | number; CameraLocation?: { Latitude?: number; Longitude?: number }; Title?: string; ImageURL?: string }) => ({
@@ -76,23 +76,28 @@ async function fetchWSDOTCameras(): Promise<Camera[]> {
 }
 
 // ── US-WEST: Caltrans California Districts ──
+// Districts fetched in parallel — a sequential loop here previously chained 9
+// awaits (~5s) and, behind the WSDOT stall, pushed the us-west region past the
+// client timeout.
 async function fetchCaltransCameras(): Promise<Camera[]> {
-  const allCams: Camera[] = [];
-  for (const dist of ['d03', 'd04', 'd05', 'd06', 'd07', 'd08', 'd10', 'd11', 'd12']) {
+  const districts = ['d03', 'd04', 'd05', 'd06', 'd07', 'd08', 'd10', 'd11', 'd12'];
+  const perDistrict = await Promise.all(districts.map(async (dist) => {
+    const cams: Camera[] = [];
     try {
       const res = await stealthFetch(`https://cwwp2.dot.ca.gov/data/${dist}/cctv/cctvStatus${dist.toUpperCase()}.json`, { signal: AbortSignal.timeout(8000) });
-      if (!res.ok) continue;
+      if (!res.ok) return cams;
       const data = await res.json();
       for (const cam of (data?.data || [])) {
         const lat = parseFloat(cam.location?.latitude);
         const lng = parseFloat(cam.location?.longitude);
         const url = cam.cctv?.imageData?.static?.currentImageURL;
         if (!lat || !lng || !url) continue;
-        allCams.push({ id: `cal-${allCams.length}`, lat, lng, name: cam.location?.locationName || 'Caltrans', city: 'California', country: 'US', feed_url: url, source: 'Caltrans' });
+        cams.push({ id: `cal-${dist}-${cams.length}`, lat, lng, name: cam.location?.locationName || 'Caltrans', city: 'California', country: 'US', feed_url: url, source: 'Caltrans' });
       }
     } catch { /* silent */ }
-  }
-  return allCams;
+    return cams;
+  }));
+  return perDistrict.flat();
 }
 
 // ── CANADA: Ottawa, Toronto, Montreal, Quebec ──
@@ -437,7 +442,10 @@ const REGION_FETCHERS: Record<string, () => Promise<Camera[]>> = {
   'middle-east': fetchMiddleEastCameras,
   'ukraine': fetchUkraineCameras,
   'uk': fetchTfLCameras,
-  'us-west': async () => [...await fetchWSDOTCameras(), ...await fetchCaltransCameras()],
+  'us-west': async () => {
+    const [wsdot, caltrans] = await Promise.all([fetchWSDOTCameras(), fetchCaltransCameras()]);
+    return [...wsdot, ...caltrans];
+  },
   'us-east': fetchUSEastCameras,
   'us-central': fetchUSCentralCameras,
   'canada': fetchCanadaCameras,
@@ -542,8 +550,25 @@ export async function GET(request: Request) {
       regionsToFetch = Object.keys(REGION_FETCHERS);
     }
 
+    // Per-region hard cap. A single dead upstream (e.g. WSDOT) must never stall
+    // the whole `region=all` batch — Promise.allSettled waits for the slowest
+    // region, so without this one stuck region times out the client and blanks
+    // every healthy region with it. Each region races a timeout that resolves to
+    // [] so healthy regions (most respond in <300ms) always return promptly.
+    const REGION_TIMEOUT_MS = 12000;
+    const withTimeout = (p: Promise<Camera[]>): Promise<Camera[]> => {
+      let timer: ReturnType<typeof setTimeout>;
+      const timeout = new Promise<Camera[]>(resolve => {
+        timer = setTimeout(() => resolve([]), REGION_TIMEOUT_MS);
+      });
+      return Promise.race([
+        Promise.resolve(p).catch(() => [] as Camera[]),
+        timeout,
+      ]).finally(() => clearTimeout(timer));
+    };
+
     const results = await Promise.allSettled(
-      regionsToFetch.map(r => REGION_FETCHERS[r]())
+      regionsToFetch.map(r => withTimeout(REGION_FETCHERS[r]()))
     );
 
     const allCameras: Camera[] = [];

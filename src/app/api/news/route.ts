@@ -52,12 +52,32 @@ const TELEGRAM_CHANNELS = [...UA_CHANNELS, ...RU_CHANNELS];
 
 const RU_CHANNEL_SET = new Set(RU_CHANNELS.map((c) => c.toLowerCase()));
 
+// Russian-actor signals: MoD official voice, "liberation" framing, RU military named as subject.
+// Fires even when a UA channel relays a Russian claim verbatim, so the tab split stays clean.
+const RU_ACTOR_RE = /мо\s*рф|міноборони\s*рф|министерство\s*обороны|освобожд|освободил|армия\s*росси|вс\s*рф\s+(?:заняли|взяли|продвин|штурм|наступ)|russian\s+(?:forces?|army|troops?)\s+(?:advance|captur|seiz|storm|enter|take|occup)/i;
+
+// Ukrainian-actor signals: official ZSU/GenStaff voice, recapture framing.
+const UA_ACTOR_RE = /зсу\s+(?:відбил|звільнил|знищил|вдарил|атакувал)|сили\s+оборони|генштаб(?:\s+зсу)?|ukrainian\s+(?:forces?|army|troops?)\s+(?:liberat|recaptur|repel|strike|destroy|advance)/i;
+
 // Which side of the war a story comes from: 'ua' = Ukrainian/neutral war OSINT,
 // 'ru' = Russian milblogger/MoD, 'world' = non-Telegram RSS fallback. Drives the
 // Live-Alerts tab split so the RU feed reads separately from the UA one.
-function sideForSource(source: string): 'ua' | 'ru' | 'world' {
+//
+// Actor detection runs first on Telegram posts: if the text unambiguously names
+// one actor as the subject, that overrides channel membership. Channel membership
+// is the fallback for ambiguous or mixed-actor articles.
+function sideForSource(source: string, text = ''): 'ua' | 'ru' | 'world' {
   const m = source.match(/^t\.me\/(.+)$/i);
   if (!m) return 'world';
+
+  if (text) {
+    const isRuActor = RU_ACTOR_RE.test(text);
+    const isUaActor = UA_ACTOR_RE.test(text);
+    if (isRuActor && !isUaActor) return 'ru';
+    if (isUaActor && !isRuActor) return 'ua';
+    // Both or neither → fall through to channel
+  }
+
   return RU_CHANNEL_SET.has(m[1].toLowerCase()) ? 'ru' : 'ua';
 }
 
@@ -227,6 +247,11 @@ const KEYWORD_COORDS: Record<string, [number, number]> = {
   'toropets': [56.500, 31.633], 'торопец': [56.500, 31.633], 'торопц': [56.500, 31.633],
   'tikhoretsk': [45.856, 40.126], 'тихорецк': [45.856, 40.126],
   'dyagilevo': [54.643, 39.570], 'olenya': [68.152, 33.464],
+  // Krasnodar Krai refineries (Slavyansk-na-Kubani cluster, Taman Peninsula terminals) — struck June 2026
+  'poltavskaya': [45.26, 38.13], 'полтавська': [45.26, 38.13], 'полтавская': [45.26, 38.13],
+  'slavyansk-na-kubani': [45.26, 38.13], 'славянськ': [45.26, 38.13], 'славянск-на-кубани': [45.26, 38.13],
+  'taman': [45.201, 36.728], 'таман': [45.201, 36.728],
+  'tamanneftegaz': [45.201, 36.728], 'таманнефтегаз': [45.201, 36.728], 'таманэфтегаз': [45.201, 36.728],
   // Nizhnekamsk industrial cluster (TANECO + TAIF-NK + Nizhnekamskneftekhim — struck June 2026)
   'nizhnekamsk': [55.64, 51.83], 'нижнекамск': [55.64, 51.83], 'нижнєкамськ': [55.64, 51.83],
   'taneco': [55.77, 51.88], 'танеко': [55.77, 51.88],
@@ -531,28 +556,38 @@ async function buildNews(): Promise<unknown> {
       await writeDiskCache(rawArticles);
     }
 
+    // Always fetch the curated RSS feeds in parallel — they are the source of
+    // WORLD-tab articles. Previously these were only fetched when Telegram
+    // completely failed, which meant the WORLD tab was always empty in normal
+    // operation. We limit to 8 items per source to keep the feed balanced.
+    const rssPromises = Object.entries(FALLBACK_FEEDS).map(async ([source, url]) => {
+      try {
+        const res = await fetch(url, { signal: AbortSignal.timeout(5000) });
+        if (!res.ok) return [];
+        const xml = await res.text();
+        return parseRSSItems(xml, source).slice(0, 8);
+      } catch { return []; }
+    });
+    const rssResults = await Promise.allSettled(rssPromises);
+    const rssArticles: ParsedArticle[] = rssResults.flatMap(r => r.status === 'fulfilled' ? r.value : []);
+
     const allArticles: ParsedArticle[] = rawArticles;
 
-    // FAILSAFE: If Telegram completely blocks the IP, fall back to traditional RSS
+    // FAILSAFE: If Telegram completely blocks the IP, add extra RSS items so
+    // the feed is never fully empty.
     if (allArticles.length === 0) {
-      const fallbackPromises = Object.entries(FALLBACK_FEEDS).map(async ([source, url]) => {
-        try {
-          const res = await fetch(url, { signal: AbortSignal.timeout(5000) });
-          if (!res.ok) return [];
-          const xml = await res.text();
-          return parseRSSItems(xml, source).slice(0, 5);
-        } catch { return []; }
-      });
-      
-      const fallbackResults = await Promise.allSettled(fallbackPromises);
-      for (const result of fallbackResults) {
-        if (result.status === 'fulfilled') allArticles.push(...result.value);
-      }
+      allArticles.push(...rssArticles);
     }
 
-    // Keep only war/conflict items (bilingual). Drops channel ads, promos,
-    // sport, weather, and other off-topic posts that these OSINT feeds also carry.
-    const conflictArticles = allArticles.filter(a => isConflict(`${a.title} ${a.description}`));
+    // Keep only war/conflict items from Telegram (bilingual). Drops channel ads,
+    // promos, sport, weather, and other off-topic posts. RSS/world articles are
+    // from curated news sources, so they pass through without the conflict filter
+    // — they always show up in the WORLD tab.
+    const rssSourceSet = new Set(rssArticles.map(a => a.source));
+    const conflictArticles = [
+      ...allArticles.filter(a => !rssSourceSet.has(a.source) && isConflict(`${a.title} ${a.description}`)),
+      ...rssArticles,
+    ];
 
     const newsItems = conflictArticles.map(article => {
       // Concatenate title + description so place names appearing only in the
@@ -575,7 +610,7 @@ async function buildNews(): Promise<unknown> {
         link: article.link,
         published: article.pubDate,
         source: article.source,
-        side: sideForSource(article.source),
+        side: sideForSource(article.source, `${article.title ?? ''} ${article.description ?? ''}`),
         risk_score: riskScore,
         coords: placed,
         coords_default: coordsDefault,

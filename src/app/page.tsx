@@ -3,7 +3,7 @@
 import { useEffect, useState, useRef, useCallback, useMemo } from 'react';
 import dynamic from 'next/dynamic';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Layers, BarChart3, Newspaper, Search, X, Globe, MapPinned, Radar, Satellite, Moon, ExternalLink, AlertTriangle, Activity, Database, Wifi, ChevronDown, ChevronUp, Bell, MoreHorizontal, Play, FileText, Network, Crosshair } from 'lucide-react';
+import { Layers, BarChart3, Newspaper, Search, X, Globe, MapPinned, Radar, Satellite, Moon, ExternalLink, AlertTriangle, Activity, Database, Wifi, ChevronDown, ChevronUp, Bell, MoreHorizontal, Play, FileText, Network, Crosshair, GitMerge } from 'lucide-react';
 import IntelFeed from '@/components/IntelFeed';
 import MarketsPanel from '@/components/MarketsPanel';
 import ScmPanel from '@/components/ScmPanel';
@@ -17,12 +17,18 @@ import KeyboardShortcuts from '@/components/KeyboardShortcuts';
 import GlobalStatusBar from '@/components/GlobalStatusBar';
 import LiveAlerts from '@/components/LiveAlerts';
 import FrontlineTracker from '@/components/FrontlineTracker';
+import TimelineControl, { TimelineEvent } from '@/components/TimelineControl';
+import { parseThermalLatest } from '@/lib/osint-utils';
 import AxisBriefing from '@/components/AxisBriefing';
+import ThreatTimeline from '@/components/ThreatTimeline';
 import ThresholdToasts from '@/components/ThresholdToasts';
 import type { ThresholdAlert } from '@/app/api/threshold-alerts/route';
 import NotificationDrawer, { type NotificationRecord } from '@/components/NotificationDrawer';
 import CommandPalette, { type PaletteCommand } from '@/components/CommandPalette';
 import ThreatFusionHUD from '@/components/ThreatFusionHUD';
+import ThreatHUD from '@/components/ThreatHUD';
+import LayerFreshness from '@/components/LayerFreshness';
+import TimelineLayerToast, { type TimelineLayerToastItem } from '@/components/TimelineLayerToast';
 
 const OsirisMap = dynamic(() => import('@/components/OsirisMap'), { ssr: false });
 const LayerPanel = dynamic(() => import('@/components/LayerPanel'));
@@ -92,11 +98,15 @@ const ZuluClock = () => {
 };
 
 /** Real entity count — no fake throughput metrics */
-const ActiveEntityCount = ({ data }: { data: Record<string, unknown[]> }) => {
+const ActiveEntityCount = ({ data, globalStats }: { data: Record<string, unknown[]>; globalStats?: any }) => {
   const count = useMemo(() => {
     if (!data) return 0;
-    return Object.values(data).reduce((sum, v) => sum + (Array.isArray(v) ? v.length : 0), 0);
-  }, [data]);
+    const live = Object.values(data).reduce((sum, v) => sum + (Array.isArray(v) ? v.length : 0), 0);
+    if (live > 0 || !globalStats) return live;
+    // Seed from globalStats on cold start until live data arrives.
+    return (globalStats.flights || 0) + (globalStats.sats || 0) + (globalStats.cctv || 0) +
+           (globalStats.weather || 0) + (globalStats.nuclear || 0) + (globalStats.incidents || 0);
+  }, [data, globalStats]);
   return <span className="text-[var(--alert-green)] font-bold tabular-nums">{count.toLocaleString()}</span>;
 };
 
@@ -107,10 +117,18 @@ function getYouTubeWatchUrl(url: string): string {
   return url;
 }
 
+const TIMELINE_TYPE_TO_LAYER: Record<string, string> = {
+  kab:     'kab_threats',
+  thermal: 'thermal_aoi',
+  capture: 'captures',
+  gdelt:   'global_incidents',
+};
+
 export default function Dashboard() {
   const dataRef = useRef<any>({});
   const [dataVersion, setDataVersion] = useState(0);
   const data = dataRef.current;
+  const [layerTimestamps, setLayerTimestamps] = useState<Record<string, number>>({});
 
   const [backendStatus, setBackendStatus] = useState<'connecting' | 'connected' | 'error'>('connecting');
   const [mapView, setMapView] = useState({ zoom: 2.5, latitude: 20, longitude: 25.48 });
@@ -118,6 +136,18 @@ export default function Dashboard() {
   const [highlight, setHighlight] = useState<{ lat: number; lng: number; ts: number } | null>(null);
   // Searchable index over every live entity array (rebuilt when data changes).
   const entityIndex = useMemo(() => buildEntityIndex(data), [dataVersion]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Timestamped events for the timeline density histogram.
+  const timelineEvents = useMemo((): TimelineEvent[] => {
+    const evs: TimelineEvent[] = [];
+    const push = (t: number, type: TimelineEvent['type']) => { if (Number.isFinite(t)) evs.push({ t, type }); };
+    (data.news        || []).forEach((n: any) => n.published  && push(new Date(n.published).getTime(),  'news'));
+    (data.kab_threats || []).forEach((k: any) => k.startedAt  && push(new Date(k.startedAt).getTime(), 'kab'));
+    (data.gdelt       || []).forEach((e: any) => e.published  && push(new Date(e.published).getTime(),  'gdelt'));
+    (data.thermal_aoi || []).forEach((a: any) => { const ms = parseThermalLatest(a.latest); if (ms) push(ms, 'thermal'); });
+    (data.captures    || []).forEach((c: any) => c.date       && push(new Date(c.date).getTime(),       'capture'));
+    return evs;
+  }, [dataVersion]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const [globalStats, setGlobalStats] = useState<any>(null);
   const mouseCoordsRef = useRef<{ lat: number; lng: number } | null>(null);
@@ -137,7 +167,7 @@ export default function Dashboard() {
   const [showEntityGraph, setShowEntityGraph] = useState(false);
   const [showFusion, setShowFusion] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
-  const [mobilePanel, setMobilePanel] = useState<'layers'|'markets'|'intel'|'search'|'recon'|'more'|'frontline'|null>(null);
+  const [mobilePanel, setMobilePanel] = useState<'layers'|'markets'|'intel'|'search'|'recon'|'more'|'timeline'|'frontline'|null>(null);
   const [mapProjection, setMapProjection] = useState<'globe'|'mercator'>('globe');
   const [mapStyle, setMapStyle] = useState<'dark'|'satellite'>('dark');
   const [sweepData, setSweepData] = useState<any>(null);
@@ -150,10 +180,24 @@ export default function Dashboard() {
   }, [osirisTheme]);
   const [showFrontlineTracker, setShowFrontlineTracker] = useState(false);
   const [showAxisBriefing, setShowAxisBriefing] = useState(false);
+  const [showThreatTimeline, setShowThreatTimeline] = useState(false);
+  const [replayTime, setReplayTime] = useState<Date | null>(null);
+  const [timelineRangeH, setTimelineRangeH] = useState(24);
+  const [showTimeline, setShowTimeline] = useState(false);
+  // Return to live when the timeline panel is closed so the map doesn't stay
+  // frozen in replay with no visible control to escape.
+  useEffect(() => {
+    if (!showTimeline && mobilePanel !== 'timeline') setReplayTime(null);
+  }, [showTimeline, mobilePanel]);
   const [thresholdAlerts, setThresholdAlerts] = useState<ThresholdAlert[]>([]);
   const [notifOpen, setNotifOpen] = useState(false);
   const [notificationLog, setNotificationLog] = useState<NotificationRecord[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
+  const [aisStatus, setAisStatus] = useState<{ live: boolean; last_message_at: string | null; source: string; vessel_api_last_fetch: string | null } | null>(null);
+  const [sessionDisabled, setSessionDisabled] = useState<Set<string>>(new Set());
+  const [layerToasts, setLayerToasts] = useState<TimelineLayerToastItem[]>([]);
+  const [focusedAxis, setFocusedAxis] = useState<string | null>(null);
+  const [focusedAxisBbox, setFocusedAxisBbox] = useState<[number, number, number, number] | null>(null);
 
   const isMobile = useIsMobile();
   const startTime = useRef(Date.now());
@@ -170,6 +214,7 @@ export default function Dashboard() {
     maritime: true,
     ships: true,
     shadow_fleet: false,
+    shadow_fleet_tracks: false,
     satellites: false,
     balloons: false,
     cctv: true,
@@ -193,6 +238,12 @@ export default function Dashboard() {
     kab_threats: false,
     drone_threats: false,
     missile_threats: false,
+    alarm_vectors: false,
+    missile_cruise:     true,
+    missile_ballistic:  true,
+    missile_kinzhal:    true,
+    missile_kh22:       true,
+    missile_s300:       true,
     ru_air_raids: false,
     frontlines: false,
     captures: false,
@@ -201,6 +252,7 @@ export default function Dashboard() {
     thermal_aoi_fires_only: false,
     internet_outages: false,
     malware: false,
+    oblast_pressure: false,
   });
   // Persist active layer toggles across restarts — read on mount, write on every change.
   // Skip the first write (count=1, initial defaults) so we don't overwrite saved state
@@ -217,14 +269,24 @@ export default function Dashboard() {
     if (layerPersistCountRef.current < 2) return;
     try { localStorage.setItem('osiris-layers', JSON.stringify(activeLayers)); } catch {}
   }, [activeLayers]);
+  const activeLayersRef = useRef(activeLayers);
+  const sessionDisabledRef = useRef(sessionDisabled);
+  useEffect(() => { activeLayersRef.current = activeLayers; }, [activeLayers]);
+  useEffect(() => { sessionDisabledRef.current = sessionDisabled; }, [sessionDisabled]);
 
   const [liveFeedUrl, setLiveFeedUrl] = useState<string | null>(null);
   const [liveFeedName, setLiveFeedName] = useState('');
   const [liveFeedEmbedAllowed, setLiveFeedEmbedAllowed] = useState(true);
-  // Splash screen
+  // Splash screen — hides when MapLibre fires its load event (onMapReady),
+  // with a 600 ms minimum so the branding is visible, and a 3s hard cap so
+  // a slow tile source never traps the user behind the splash indefinitely.
+  const splashResolveRef = useRef<(() => void) | null>(null);
   useEffect(() => {
-    const splashTimer = setTimeout(() => setShowSplash(false), 2500);
-    return () => clearTimeout(splashTimer);
+    let resolved = false;
+    const resolve = () => { if (!resolved) { resolved = true; setShowSplash(false); } };
+    splashResolveRef.current = resolve;
+    const cap = setTimeout(resolve, 3000);
+    return () => { clearTimeout(cap); resolved = true; };
   }, []);
 
   // URL state: parse on mount
@@ -344,6 +406,54 @@ export default function Dashboard() {
     }
   }, []);
 
+  const handleLayerDisable = useCallback((key: string) => {
+    setSessionDisabled(prev => new Set([...prev, key]));
+  }, []);
+
+  const handleScrub = useCallback((time: Date | null) => {
+    setReplayTime(time);
+    if (!time) return;
+    const al = activeLayersRef.current;
+    const sd = sessionDisabledRef.current;
+    setActiveLayers(prev => {
+      const next = { ...prev };
+      let changed = false;
+      Object.entries(TIMELINE_TYPE_TO_LAYER).forEach(([, layerKey]) => {
+        if (!(layerKey in next)) return;
+        if (!next[layerKey as keyof typeof next] && !sd.has(layerKey)) {
+          (next as Record<string, boolean>)[layerKey] = true;
+          changed = true;
+          setLayerToasts(toasts => {
+            if (toasts.some(t => t.layerKey === layerKey)) return toasts;
+            const toastId = `${layerKey}-${Date.now()}`;
+            return [...toasts, {
+              id: toastId, layerKey,
+              layerLabel: layerKey.replace(/_/g, ' '),
+              eventCount: 0,
+              timeLabel: 'timeline scrub',
+              onUndo: () => {
+                setActiveLayers((p: any) => ({ ...p, [layerKey]: false }));
+                setSessionDisabled((p: Set<string>) => new Set([...p, layerKey]));
+                setLayerToasts((p: TimelineLayerToastItem[]) => p.filter(t => t.layerKey !== layerKey));
+              },
+            }];
+          });
+        }
+      });
+      return changed ? next : prev;
+    });
+  }, [timelineRangeH]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const handleAxisFocus = useCallback((name: string | null, bbox: [number, number, number, number] | null) => {
+    setFocusedAxis(name);
+    setFocusedAxisBbox(bbox);
+    if (bbox) {
+      const cx = (bbox[0] + bbox[2]) / 2;
+      const cy = (bbox[1] + bbox[3]) / 2;
+      setFlyToLocation({ lat: cy, lng: cx, ts: Date.now() });
+    }
+  }, []);
+
   // Global handler for map popups to manually open the Intel Graph
   useEffect(() => {
     (window as any).openOsirisIntel = (entity: any) => {
@@ -351,7 +461,7 @@ export default function Dashboard() {
         setEntityGraphTarget({ type: 'aircraft', id: entity.callsign?.trim() || entity.icao24, label: entity.callsign?.trim() || entity.icao24, properties: { model: entity.model, registration: entity.registration, icao24: entity.icao24 } });
         setShowEntityGraph(true);
       } else if (entity?.type === 'vessel' || entity?.mmsi || entity?.imo) {
-        setEntityGraphTarget({ type: 'vessel', id: entity.imo || entity.mmsi || entity.name, label: entity.name || entity.imo, properties: { flag: entity.flag, speed: entity.speed, destination: entity.destination } });
+        setEntityGraphTarget({ type: 'vessel', id: entity.name || entity.imo || entity.mmsi, label: entity.name || entity.imo, properties: { flag: entity.flag, speed: entity.speed, destination: entity.destination, imo: entity.imo, mmsi: entity.mmsi, vesselName: entity.name } });
         setShowEntityGraph(true);
       } else if (entity?.type === 'ip' && entity?.ip) {
         setEntityGraphTarget({ type: 'ip', id: entity.ip, label: entity.ip, properties: { threat_type: entity.threat_type, status: entity.status } });
@@ -424,30 +534,32 @@ export default function Dashboard() {
   // Single source of truth for "how to fetch each layer's data" — shared by the
   // layer-toggle loader below and by the search bar's ensureSearchSources().
   const LAYER_LOADERS: Record<string, () => void> = useMemo(() => ({
-    flights: () => fetchEndpoint('/api/flights'),
+    flights: () => fetchEndpoint('/api/flights').then(() => setLayerTimestamps(p => ({ ...p, flights: Date.now() }))),
     satellites: () => fetchEndpoint('/api/satellites'),
     fires: () => fetchEndpoint('/api/fires'),
     cctv: () => fetchEndpoint('/api/cctv?region=all&v=2'),
-    maritime: () => fetchEndpoint('/api/maritime', d => ({ maritime_ports: d.ports, maritime_chokepoints: d.chokepoints, maritime_ships: d.ships })),
+    maritime: () => fetchEndpoint('/api/maritime', (d: any) => { if (d.ais_status) setAisStatus(d.ais_status); return { maritime_ports: d.ports, maritime_chokepoints: d.chokepoints, maritime_ships: d.ships }; }),
     balloons: () => fetchEndpoint('/api/balloons', d => ({ balloons: d.balloons })),
     radiation: () => fetchEndpoint('/api/radiation', d => ({ radiation: d.stations })),
     live_news: () => fetchEndpoint('/api/live-news', d => ({ live_feeds: d.feeds })),
     weather: () => fetchEndpoint('/api/weather', d => ({ weather_events: d.events })),
     infrastructure: () => fetchEndpoint('/api/infrastructure', d => ({ infrastructure: d.infrastructure })),
-    gdelt: () => fetchEndpoint('/api/gdelt', d => ({ gdelt: d.events })),
-    air_raids: () => fetchEndpoint('/api/air-raids', d => ({ air_raids: d.alerts })),
+    gdelt: () => fetchEndpoint('/api/conflict-events', d => ({ gdelt: d.events })),
+    air_raids: () => fetchEndpoint('/api/air-raids', d => ({ air_raids: d.alerts })).then(() => setLayerTimestamps(p => ({ ...p, air_raids: Date.now() }))),
     power_outages: () => fetchEndpoint('/api/power-outages', d => ({ power_outages: d.outages })),
-    kab_threats: () => fetchEndpoint('/api/kab-threats', d => ({ kab_threats: d.threats })),
-    weapon_threats: () => fetchEndpoint('/api/weapon-threats', d => ({ weapon_threats: d.threats })),
-    drone_threats: () => fetchEndpoint('/api/drone-threats', d => ({ drone_threats: d.threats, drone_waves: d.waves })),
-    missile_threats: () => fetchEndpoint('/api/missile-threats', d => ({ missile_routes: d.routes })),
+    kab_threats: () => fetchEndpoint('/api/kab-threats', d => ({ kab_threats: d.threats })).then(() => setLayerTimestamps(p => ({ ...p, kab_threats: Date.now() }))),
+    weapon_threats: () => fetchEndpoint('/api/weapon-threats', d => ({ weapon_threats: d.threats })).then(() => setLayerTimestamps(p => ({ ...p, weapon_threats: Date.now() }))),
+    drone_threats: () => fetchEndpoint('/api/drone-threats', d => ({ drone_threats: d.threats, drone_waves: d.waves, drone_uav_count: d.uav_count ?? 0, alarm_vectors: d.alarm_vectors ?? [] })).then(() => setLayerTimestamps(p => ({ ...p, drone_threats: Date.now() }))),
+    missile_threats: () => fetchEndpoint('/api/missile-threats', d => ({ missile_routes: d.routes })).then(() => setLayerTimestamps(p => ({ ...p, missile_threats: Date.now() }))),
     ru_air_raids: () => fetchEndpoint('/api/ru-air-raids', d => ({ ru_air_raids: d.events })),
-    frontlines: () => fetchEndpoint('/api/frontlines', d => ({ frontlines: d.frontlines?.features || [] })),
-    captures: () => fetchEndpoint('/api/captures', d => ({ captures: d.captures })),
+    frontlines: () => fetchEndpoint('/api/frontlines?delta=7', (d: any) => ({ frontlines: d.frontlines?.features || [], frontline_delta: d.delta_frontlines?.features || [] })).then(() => setLayerTimestamps(p => ({ ...p, frontlines: Date.now() }))),
+    captures: () => fetchEndpoint('/api/captures', d => ({ captures: d.captures })).then(() => setLayerTimestamps(p => ({ ...p, captures: Date.now() }))),
     air_quality: () => fetchEndpoint('/api/air-quality', d => ({ air_quality: d.stations })),
     thermal_aoi: () => fetchEndpoint('/api/strategic-thermal', d => ({ thermal_aoi: d.aois })),
     internet_outages: () => fetchEndpoint('/api/radar', d => ({ ioda_outages: d.outages })),
     malware: () => fetchEndpoint('/api/malware', d => ({ malware_threats: d.threats })),
+    oblast_pressure: () => fetchEndpoint('/api/oblast-pressure', (d: any) => ({ oblast_pressure: d.oblasts ?? [] })),
+    shadow_fleet_tracks: () => fetchEndpoint('/api/maritime?tracks=1', (d: any) => ({ shadow_fleet_tracks: d.tracks ?? [] })),
   }), [fetchEndpoint]);
 
   // Fetch a source at most once (does NOT toggle the layer on).
@@ -463,6 +575,24 @@ export default function Dashboard() {
     ['flights', 'satellites', 'cctv', 'maritime', 'radiation', 'live_news', 'weather', 'infrastructure', 'gdelt', 'kab_threats', 'power_outages'].forEach(loadOnce);
   }, [loadOnce]);
 
+  // Background pre-fetch: populate LayerPanel counts for every layer regardless
+  // of whether it is toggled on. Split into three tiers so the server never
+  // receives a large burst — each tier fires after the previous one has settled.
+  // loadOnce() skips keys already fetched by active layers.
+  useEffect(() => {
+    const t1 = setTimeout(() => {
+      ['flights', 'air_raids', 'kab_threats', 'power_outages', 'frontlines', 'captures'].forEach(loadOnce);
+    }, 1000);
+    const t2 = setTimeout(() => {
+      ['thermal_aoi', 'satellites', 'fires', 'weather', 'infrastructure', 'gdelt', 'radiation'].forEach(loadOnce);
+    }, 4000);
+    const t3 = setTimeout(() => {
+      ['maritime', 'live_news', 'cctv', 'air_quality', 'internet_outages', 'malware',
+       'weapon_threats', 'drone_threats', 'missile_threats', 'ru_air_raids'].forEach(loadOnce);
+    }, 8000);
+    return () => { clearTimeout(t1); clearTimeout(t2); clearTimeout(t3); };
+  }, [loadOnce]);
+
   // Picking an entity from search: fly to it, reveal its layer, and highlight it.
   const handleSelectEntity = useCallback((e: SearchEntity) => {
     const ts = Date.now();
@@ -473,7 +603,7 @@ export default function Dashboard() {
 
   // ── LAYER-AWARE DATA LOADING — only fetch when layer is toggled ON ──
   useEffect(() => {
-    if (activeLayers.flights || activeLayers.military || activeLayers.jets || activeLayers.private) loadOnce('flights');
+    if (activeLayers.flights || activeLayers.military || activeLayers.jets || activeLayers.private || activeLayers.gps_jamming) loadOnce('flights');
     if (activeLayers.satellites) loadOnce('satellites');
     if (activeLayers.fires) loadOnce('fires');
     if (activeLayers.cctv) loadOnce('cctv');
@@ -497,6 +627,8 @@ export default function Dashboard() {
     if (activeLayers.thermal_aoi) loadOnce('thermal_aoi');
     if (activeLayers.internet_outages) loadOnce('internet_outages');
     if (activeLayers.malware) loadOnce('malware');
+    if (activeLayers.oblast_pressure) loadOnce('oblast_pressure');
+    if (activeLayers.shadow_fleet_tracks) loadOnce('shadow_fleet_tracks');
   }, [activeLayers, loadOnce]);
 
   // Background pre-fetch: populate LayerPanel counts for every layer
@@ -536,8 +668,8 @@ export default function Dashboard() {
   // ── LAYER-AWARE POLLING — only poll data for active layers ──
   useEffect(() => {
     const intervals: ReturnType<typeof setInterval>[] = [];
-    if (activeLayers.flights || activeLayers.military || activeLayers.jets || activeLayers.private) {
-      intervals.push(setInterval(() => fetchEndpoint('/api/flights'), 300000)); // 5 min (was 2 min)
+    if (activeLayers.flights || activeLayers.military || activeLayers.jets || activeLayers.private || activeLayers.gps_jamming) {
+      intervals.push(setInterval(() => fetchEndpoint('/api/flights').then(() => setLayerTimestamps(p => ({ ...p, flights: Date.now() }))), 300000)); // 5 min (was 2 min)
     }
 
     if (activeLayers.balloons) {
@@ -547,25 +679,25 @@ export default function Dashboard() {
       intervals.push(setInterval(() => fetchEndpoint('/api/radiation', d => ({ radiation: d.stations })), 300000)); // 5m
     }
     if (activeLayers.maritime || activeLayers.ships || activeLayers.shadow_fleet) {
-      intervals.push(setInterval(() => fetchEndpoint('/api/maritime', d => ({ maritime_ports: d.ports, maritime_chokepoints: d.chokepoints, maritime_ships: d.ships })), 10000)); // 10s
+      intervals.push(setInterval(() => fetchEndpoint('/api/maritime', (d: any) => { if (d.ais_status) setAisStatus(d.ais_status); return { maritime_ports: d.ports, maritime_chokepoints: d.chokepoints, maritime_ships: d.ships }; }), 10000)); // 10s
     }
     if (activeLayers.air_raids) {
-      intervals.push(setInterval(() => fetchEndpoint('/api/air-raids', d => ({ air_raids: d.alerts })), 60000)); // 1 min
+      intervals.push(setInterval(() => fetchEndpoint('/api/air-raids', d => ({ air_raids: d.alerts })).then(() => setLayerTimestamps(p => ({ ...p, air_raids: Date.now() }))), 60000)); // 1 min
     }
     if (activeLayers.kab_threats) {
-      intervals.push(setInterval(() => fetchEndpoint('/api/kab-threats', d => ({ kab_threats: d.threats })), 60000)); // 1 min
+      intervals.push(setInterval(() => fetchEndpoint('/api/kab-threats', d => ({ kab_threats: d.threats })).then(() => setLayerTimestamps(p => ({ ...p, kab_threats: Date.now() }))), 60000)); // 1 min
     }
     if (activeLayers.drone_threats) {
-      intervals.push(setInterval(() => fetchEndpoint('/api/drone-threats', d => ({ drone_threats: d.threats, drone_waves: d.waves })), 60000)); // 1 min — "last 1.5h" data
+      intervals.push(setInterval(() => fetchEndpoint('/api/drone-threats', d => ({ drone_threats: d.threats, drone_waves: d.waves, drone_uav_count: d.uav_count ?? 0, alarm_vectors: d.alarm_vectors ?? [] })).then(() => setLayerTimestamps(p => ({ ...p, drone_threats: Date.now() }))), 60000)); // 1 min — "last 1.5h" data
     }
     if (activeLayers.missile_threats) {
-      intervals.push(setInterval(() => fetchEndpoint('/api/missile-threats', d => ({ missile_routes: d.routes })), 60000)); // 1 min — "last 1.5h" data
+      intervals.push(setInterval(() => fetchEndpoint('/api/missile-threats', d => ({ missile_routes: d.routes })).then(() => setLayerTimestamps(p => ({ ...p, missile_threats: Date.now() }))), 60000)); // 1 min — "last 1.5h" data
     }
     if (activeLayers.power_outages) {
       intervals.push(setInterval(() => fetchEndpoint('/api/power-outages', d => ({ power_outages: d.outages })), 300000)); // 5 min
     }
     if (activeLayers.frontlines) {
-      intervals.push(setInterval(() => fetchEndpoint('/api/frontlines', d => ({ frontlines: d.frontlines?.features || [] })), 1800000)); // 30 min
+      intervals.push(setInterval(() => fetchEndpoint('/api/frontlines?delta=7', (d: any) => ({ frontlines: d.frontlines?.features || [], frontline_delta: d.delta_frontlines?.features || [] })).then(() => setLayerTimestamps(p => ({ ...p, frontlines: Date.now() }))), 1800000)); // 30 min
     }
     if (activeLayers.air_quality) {
       intervals.push(setInterval(() => fetchEndpoint('/api/air-quality', d => ({ air_quality: d.stations })), 3600000)); // 1 h
@@ -574,10 +706,28 @@ export default function Dashboard() {
       intervals.push(setInterval(() => fetchEndpoint('/api/strategic-thermal', d => ({ thermal_aoi: d.aois })), 3600000)); // 1 h
     }
     if (activeLayers.captures) {
-      intervals.push(setInterval(() => fetchEndpoint('/api/captures', d => ({ captures: d.captures })), 300000)); // 5 min
+      intervals.push(setInterval(() => fetchEndpoint('/api/captures', d => ({ captures: d.captures })).then(() => setLayerTimestamps(p => ({ ...p, captures: Date.now() }))), 300000)); // 5 min
     }
     if (activeLayers.global_incidents) {
-      intervals.push(setInterval(() => fetchEndpoint('/api/gdelt', d => ({ gdelt: d.events })), 300000)); // 5 min
+      intervals.push(setInterval(() => fetchEndpoint('/api/conflict-events', d => ({ gdelt: d.events })), 300000)); // 5 min
+    }
+    if (activeLayers.oblast_pressure) {
+      intervals.push(setInterval(() => fetchEndpoint('/api/oblast-pressure', (d: any) => ({ oblast_pressure: d.oblasts ?? [] })), 60_000)); // 1 min
+    }
+    if (activeLayers.shadow_fleet_tracks) {
+      intervals.push(setInterval(() => fetchEndpoint('/api/maritime?tracks=1', (d: any) => ({ shadow_fleet_tracks: d.tracks ?? [] })), 300_000)); // 5 min
+    }
+    if (activeLayers.ru_air_raids) {
+      intervals.push(setInterval(() => fetchEndpoint('/api/ru-air-raids', d => ({ ru_air_raids: d.events })), 60000)); // 1 min
+    }
+    if (activeLayers.air_raids) {
+      intervals.push(setInterval(() => fetchEndpoint('/api/weapon-threats', d => ({ weapon_threats: d.threats })), 60000)); // 1 min — enriches air-raid popups
+    }
+    if (activeLayers.internet_outages) {
+      intervals.push(setInterval(() => fetchEndpoint('/api/radar', d => ({ ioda_outages: d.outages })), 900000)); // 15 min
+    }
+    if (activeLayers.malware) {
+      intervals.push(setInterval(() => fetchEndpoint('/api/malware', d => ({ malware_threats: d.threats })), 900000)); // 15 min
     }
     return () => intervals.forEach(clearInterval);
   }, [activeLayers, fetchEndpoint]);
@@ -669,7 +819,7 @@ export default function Dashboard() {
     // GDELT events
     if (data.gdelt?.length) {
       for (const g of data.gdelt) {
-        if (!g.lat || !g.lng) continue;
+        if (g.lat == null || g.lng == null) continue;
         sdkEntities.push({
           type: 'Feature', geometry: { type: 'Point', coordinates: [g.lng, g.lat] },
           properties: { domain: 'INTEL', name: g.name || 'GDELT Event', source: 'GDELT Project' },
@@ -757,6 +907,7 @@ export default function Dashboard() {
     (data.commercial_flights?.length||0)+(data.private_flights?.length||0)+(data.private_jets?.length||0)+(data.military_flights?.length||0)
   ), [data.commercial_flights, data.private_flights, data.private_jets, data.military_flights]);
 
+  const uavCount = (data.drone_uav_count as number | undefined) ?? 0;
 
   return (
     <main className="fixed inset-0 w-full h-full bg-[var(--bg-void)] overflow-hidden">
@@ -975,7 +1126,31 @@ export default function Dashboard() {
         notifications={notificationLog}
         onClear={() => setNotificationLog([])}
         onLocate={(lat, lng) => { setFlyToLocation({ lat, lng, ts: Date.now() }); setNotifOpen(false); }}
+        onDismiss={(id) => setNotificationLog(prev => prev.filter(n => n.id !== id))}
+        onDismissGroup={(ids) => { const s = new Set(ids); setNotificationLog(prev => prev.filter(n => !s.has(n.id))); }}
       />
+
+      {/* ── TIMELINE LAYER TOASTS ── */}
+      <TimelineLayerToast
+        toasts={layerToasts}
+        onDismiss={(id) => setLayerToasts(prev => prev.filter(t => t.id !== id))}
+      />
+
+      {/* ── AIS STALE BANNER ── */}
+      {activeLayers.ships && aisStatus && !aisStatus.live && (
+        <div className="absolute top-0 left-0 right-0 z-[500] flex items-center justify-center gap-3 px-4 py-1 font-mono text-[9px] tracking-[0.25em] uppercase pointer-events-none"
+          style={{ background: 'rgba(220,38,38,0.15)', borderBottom: '1px solid rgba(220,38,38,0.5)', backdropFilter: 'blur(4px)' }}>
+          <span style={{ color: '#ef4444', fontWeight: 700 }}>⚠ AIS STREAM OFFLINE</span>
+          <span style={{ color: 'rgba(239,68,68,0.7)' }}>·</span>
+          <span style={{ color: 'rgba(239,68,68,0.8)' }}>
+            {aisStatus.source === 'vesselapi' && aisStatus.vessel_api_last_fetch
+              ? `VESSEL DATA VIA API · LAST SWEEP ${new Date(aisStatus.vessel_api_last_fetch).toUTCString().slice(17, 22)}Z`
+              : aisStatus.last_message_at
+                ? `LAST LIVE MSG ${new Date(aisStatus.last_message_at).toUTCString().slice(17, 22)}Z · DATA MAY BE STALE`
+                : 'NO LIVE DATA · CACHE ONLY'}
+          </span>
+        </div>
+      )}
 
       {/* ── MAP ── */}
       <ErrorBoundary name="Map">
@@ -997,8 +1172,39 @@ export default function Dashboard() {
           scanTargets={scanTargets}
           demoMode={demoMode}
           theme={osirisTheme}
+          replayTime={replayTime}
+          focusedAxisBbox={focusedAxisBbox}
+          onMapReady={() => setTimeout(() => splashResolveRef.current?.(), 600)}
         />
       </ErrorBoundary>
+
+      {/* ── THREAT HUD — active UAV count during drone raids ── */}
+      <ThreatHUD uavCount={uavCount} />
+
+
+      {/* ── LAYER FRESHNESS INDICATOR (desktop only) ── */}
+      {!isMobile && (
+        <LayerFreshness activeLayers={activeLayers} layerTimestamps={layerTimestamps} />
+      )}
+
+      {/* ── TIMELINE CONTROL (desktop only) ── */}
+      <AnimatePresence>
+        {showTimeline && !isMobile && (
+          <motion.div
+            initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 16 }}
+            transition={{ duration: 0.2 }}
+            className="absolute bottom-[70px] left-[315px] right-[52px] z-[200]"
+          >
+            <TimelineControl
+              replayTime={replayTime}
+              timelineRangeH={timelineRangeH}
+              events={timelineEvents}
+              onScrub={handleScrub}
+              onRangeChange={setTimelineRangeH}
+            />
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* ── MAP VIEW CONTROLS (3D/2D + SATELLITE TOGGLE) ── */}
       <motion.div
@@ -1052,20 +1258,6 @@ export default function Dashboard() {
         </div>
       </motion.div>
 
-      {/* ── NOTIFICATION BELL (desktop) ── */}
-      <motion.button
-        initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 3 }}
-        onClick={() => { setNotifOpen(true); setUnreadCount(0); }}
-        className="status-bar-desktop absolute top-3.5 right-[340px] z-[210] pointer-events-auto w-8 h-8 flex items-center justify-center rounded-lg glass-panel text-[var(--text-muted)] hover:text-[var(--text-primary)] transition-colors"
-        title="Notification log"
-      >
-        <Bell className="w-3.5 h-3.5" />
-        {unreadCount > 0 && (
-          <span className="absolute -top-1 -right-1 min-w-[16px] h-4 px-1 rounded-full bg-[#FF3D3D] text-white text-[8px] font-mono font-bold flex items-center justify-center">
-            {unreadCount > 99 ? '99+' : unreadCount}
-          </span>
-        )}
-      </motion.button>
 
       {/* ── TOP-RIGHT STATUS (desktop) — C2 DISPLAY ── */}
       <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 3 }} className="status-bar-desktop absolute top-4 right-6 z-[200] pointer-events-none flex items-center gap-4 text-[9px] font-mono tracking-widest text-[var(--text-muted)]">
@@ -1125,7 +1317,7 @@ export default function Dashboard() {
 
 
       {/* ── NEW SIDEBAR (Root Level) ── */}
-      {showLayers && !isMobile && <LayerPanel data={data} activeLayers={activeLayers} setActiveLayers={setActiveLayers} theme={osirisTheme} setTheme={setOsirisTheme} />}
+      {showLayers && !isMobile && <LayerPanel data={data} activeLayers={activeLayers} setActiveLayers={setActiveLayers} theme={osirisTheme} setTheme={setOsirisTheme} onLayerDisable={handleLayerDisable} />}
 
       {/* ── RIGHT TOOL STRIP (desktop only — mobile uses bottom nav) ── */}
       {!isMobile && <div className="absolute right-2 top-1/2 -translate-y-1/2 flex flex-col gap-2 z-[250] pointer-events-auto bg-black/40 backdrop-blur-sm p-1 rounded-full border border-white/5">
@@ -1196,6 +1388,15 @@ export default function Dashboard() {
           </AnimatePresence>
         </div>
 
+        {/* Timeline toggle */}
+        <button
+          onClick={() => setShowTimeline(t => !t)}
+          title="Event timeline / playback"
+          className={`w-8 h-8 rounded-full flex items-center justify-center transition-colors ${showTimeline ? 'bg-[var(--cyan-primary)]/20' : 'hover:bg-white/10'}`}
+        >
+          <Play className={`w-4 h-4 ${showTimeline ? 'text-[var(--cyan-primary)]' : 'text-white/60'}`} />
+        </button>
+
         {/* Frontline change tracker toggle */}
         <button
           onClick={() => setShowFrontlineTracker(t => !t)}
@@ -1214,6 +1415,15 @@ export default function Dashboard() {
           <MapPinned className={`w-4 h-4 ${showAxisBriefing ? 'text-[var(--gold-primary)]' : 'text-white/60'}`} />
         </button>
 
+        {/* Threat Timeline toggle */}
+        <button
+          onClick={() => setShowThreatTimeline(t => !t)}
+          className={`p-2 rounded transition-colors ${showThreatTimeline ? 'bg-orange-500/20 text-orange-400' : 'text-white/40 hover:text-white/70'}`}
+          title="Threat Timeline"
+        >
+          <GitMerge size={16} />
+        </button>
+
         {/* Entity graph (Intelligence Layer) toggle */}
         <div className="relative group">
           <button onClick={() => { setShowEntityGraph(!showEntityGraph); setShowIntel(false); setShowMarkets(false); setShowAlerts(false); setShowSearch(false); setShowFusion(false); }} className={`w-8 h-8 rounded-full flex items-center justify-center transition-colors ${showEntityGraph ? 'bg-[#D4AF37]/20' : 'hover:bg-white/10'}`}>
@@ -1230,6 +1440,22 @@ export default function Dashboard() {
             <div className="absolute right-12 top-0">
               <ThreatFusionHUD onLocate={(lat: number, lng: number) => { setFlyToLocation({ lat, lng, ts: Date.now() }); setMapView(v => ({ ...v, zoom: Math.max(v.zoom, 5) })); }} />
             </div>
+          )}
+        </div>
+
+        {/* Notification bell */}
+        <div className="relative">
+          <button
+            onClick={() => { setNotifOpen(true); setUnreadCount(0); }}
+            className={`w-8 h-8 rounded-full flex items-center justify-center transition-colors hover:bg-white/10 ${unreadCount > 0 ? 'text-[#FF3D3D]' : 'text-white/60'}`}
+            title="Notification log"
+          >
+            <Bell className="w-4 h-4" />
+          </button>
+          {unreadCount > 0 && (
+            <span className="absolute -top-1 -right-1 min-w-[14px] h-3.5 px-0.5 rounded-full bg-[#FF3D3D] text-white text-[7px] font-mono font-bold flex items-center justify-center pointer-events-none">
+              {unreadCount > 99 ? '99+' : unreadCount}
+            </span>
           )}
         </div>
 
@@ -1371,7 +1597,7 @@ export default function Dashboard() {
                 <div className="px-3 pb-3">
                   <div className="flex items-center justify-between mb-2">
                     <span className="hud-text text-[9px] text-[var(--text-primary)]">
-                      {mobilePanel === 'layers' ? 'LAYERS & STATS' : mobilePanel === 'markets' ? 'MARKETS & INTEL' : mobilePanel === 'intel' ? 'INTEL FEED' : mobilePanel === 'recon' ? 'OSIRIS RECON' : mobilePanel === 'more' ? 'MORE TOOLS' : mobilePanel === 'frontline' ? 'FRONTLINE CHANGES' : 'SEARCH'}
+                      {mobilePanel === 'layers' ? 'LAYERS & STATS' : mobilePanel === 'markets' ? 'MARKETS & INTEL' : mobilePanel === 'intel' ? 'INTEL FEED' : mobilePanel === 'recon' ? 'OSIRIS RECON' : mobilePanel === 'more' ? 'MORE TOOLS' : mobilePanel === 'timeline' ? 'EVENT TIMELINE' : mobilePanel === 'frontline' ? 'FRONTLINE CHANGES' : 'SEARCH'}
                     </span>
                     <button onClick={() => setMobilePanel(null)} className="text-[var(--text-muted)] p-1"><X className="w-4 h-4" /></button>
                   </div>
@@ -1379,14 +1605,14 @@ export default function Dashboard() {
                     <>
                       <div className="glass-panel-sm p-2 mb-2">
                         <div className="grid grid-cols-5 gap-1 text-center">
-                          <div><div className="hud-label" style={{fontSize:'6px'}}>AIR</div><div className="hud-value text-[9px]">{totalFlights.toLocaleString()}</div></div>
-                          <div><div className="hud-label" style={{fontSize:'6px'}}>SAT</div><div className="hud-value text-[9px]">{(data.satellites?.length||0)}</div></div>
-                          <div><div className="hud-label" style={{fontSize:'6px'}}>CAM</div><div className="hud-value text-[9px]">{(data.cameras?.length||0)}</div></div>
-                          <div><div className="hud-label" style={{fontSize:'6px'}}>WX</div><div className="hud-value text-[9px]" style={{color:'var(--accent-weather)'}}>{(data.weather_events?.length||0)}</div></div>
-                          <div><div className="hud-label" style={{fontSize:'6px'}}>NUC</div><div className="hud-value text-[9px]" style={{color:'var(--accent-nuclear)'}}>{(data.infrastructure?.length||0)}</div></div>
+                          <div><div className="hud-label" style={{fontSize:'6px'}}>AIR</div><div className="hud-value text-[9px]">{(totalFlights || globalStats?.flights || 0).toLocaleString()}</div></div>
+                          <div><div className="hud-label" style={{fontSize:'6px'}}>SAT</div><div className="hud-value text-[9px]">{(data.satellites?.length || globalStats?.sats || 0)}</div></div>
+                          <div><div className="hud-label" style={{fontSize:'6px'}}>CAM</div><div className="hud-value text-[9px]">{(data.cameras?.length || globalStats?.cctv || 0)}</div></div>
+                          <div><div className="hud-label" style={{fontSize:'6px'}}>WX</div><div className="hud-value text-[9px]" style={{color:'var(--accent-weather)'}}>{(data.weather_events?.length || globalStats?.weather || 0)}</div></div>
+                          <div><div className="hud-label" style={{fontSize:'6px'}}>NUC</div><div className="hud-value text-[9px]" style={{color:'var(--accent-nuclear)'}}>{(data.infrastructure?.length || globalStats?.nuclear || 0)}</div></div>
                         </div>
                       </div>
-                      <LayerPanel data={data} activeLayers={activeLayers} setActiveLayers={setActiveLayers} isMobile={true} theme={osirisTheme} setTheme={setOsirisTheme} />
+                      <LayerPanel data={data} activeLayers={activeLayers} setActiveLayers={setActiveLayers} isMobile={true} theme={osirisTheme} setTheme={setOsirisTheme} onLayerDisable={handleLayerDisable} />
                       <div className="mt-2">
                         <ViewPresets onNavigate={(lat, lng, zoom) => { setFlyToLocation({ lat, lng, ts: Date.now() }); setMapView(v => ({ ...v, zoom })); setMobilePanel(null); }} />
                       </div>
@@ -1408,6 +1634,7 @@ export default function Dashboard() {
                   {mobilePanel === 'more' && (
                     <div className="grid grid-cols-2 gap-2">
                       {([
+                        { id: 'timeline' as const, icon: Play, label: 'TIMELINE', color: 'var(--cyan-primary)' },
                         { id: 'frontline' as const, icon: Activity, label: 'FRONTLINE', color: '#FF3D3D' },
                       ] as const).map(item => (
                         <button
@@ -1420,6 +1647,15 @@ export default function Dashboard() {
                         </button>
                       ))}
                     </div>
+                  )}
+                  {mobilePanel === 'timeline' && (
+                    <TimelineControl
+                      replayTime={replayTime}
+                      timelineRangeH={timelineRangeH}
+                      events={timelineEvents}
+                      onScrub={handleScrub}
+                      onRangeChange={setTimelineRangeH}
+                    />
                   )}
                   {mobilePanel === 'frontline' && (
                     <FrontlineTracker />
@@ -1476,7 +1712,23 @@ export default function Dashboard() {
             transition={{ duration: 0.25 }}
             className="absolute bottom-6 right-14 z-[205] pointer-events-none"
           >
-            <AxisBriefing show={showAxisBriefing} />
+            <AxisBriefing show={showAxisBriefing} focusedAxis={focusedAxis} onAxisFocus={handleAxisFocus} />
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* ── Threat Timeline panel (desktop) ── */}
+      <AnimatePresence>
+        {!isMobile && showThreatTimeline && (
+          <motion.div
+            key="threat-timeline"
+            initial={{ opacity: 0, x: 20 }}
+            animate={{ opacity: 1, x: 0 }}
+            exit={{ opacity: 0, x: 20 }}
+            className="absolute bottom-6 z-[205] pointer-events-auto"
+            style={{ right: showAxisBriefing ? '19rem' : '3.5rem' }}
+          >
+            <ThreatTimeline show={showThreatTimeline} />
           </motion.div>
         )}
       </AnimatePresence>
@@ -1554,6 +1806,26 @@ export default function Dashboard() {
       {/* Keyboard Shortcuts Overlay */}
       <CommandPalette commands={paletteCommands} />
       <KeyboardShortcuts />
+
+      {/* ── CONFLICT EVENTS CONFIDENCE LEGEND ── */}
+      {activeLayers.global_incidents && !isMobile && (
+        <div className="absolute bottom-6 right-12 z-[150] pointer-events-none">
+          <div className="glass-panel px-2 py-1.5 text-[8px] font-mono">
+            <div className="text-[var(--cyan-primary)]/70 mb-1 tracking-wider font-bold">CONFLICT INTEL</div>
+            {([
+              { color: '#FF3D3D', label: 'CONFIRMED',  sub: '\u22652 sources' },
+              { color: '#FF9500', label: 'REPORTED',   sub: '1 source'   },
+              { color: '#FFD54F', label: 'UNVERIFIED', sub: 'Telegram'   },
+            ] as const).map(({ color, label, sub }) => (
+              <div key={label} className="flex items-center gap-1.5 mb-0.5">
+                <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: color }} />
+                <span className="text-white/80">{label}</span>
+                <span className="text-white/30">{sub}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* ── GLOBAL STATUS TICKER (bottom) ── */}
       <GlobalStatusBar />

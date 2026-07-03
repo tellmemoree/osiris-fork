@@ -151,7 +151,13 @@ export default function IntelFeed({ data, onLocate }: IntelFeedProps) {
                 news.slice(0, 40).map((item, i) => {
                   const itemKey = `${item.source ?? ''}-${item.published ?? ''}-${i}`;
                   const isOpen = openItems.has(itemKey);
-                  const hasBody = item.description && item.description !== item.title;
+                  // Strip leading title text from description to avoid showing the headline twice.
+                  const rawDesc = item.description ?? '';
+                  const titlePrefix = item.title ?? '';
+                  const body = titlePrefix.length > 0 && rawDesc.startsWith(titlePrefix)
+                    ? rawDesc.slice(titlePrefix.length).replace(/^[\s\n.,:;–—-]+/, '')
+                    : rawDesc;
+                  const hasBody = body.length > 20;
                   return (
                     <div
                       key={itemKey}
@@ -194,7 +200,7 @@ export default function IntelFeed({ data, onLocate }: IntelFeedProps) {
                       {/* Body / full story */}
                       {hasBody && (
                         <p className={`text-[10px] text-[var(--text-secondary)] leading-snug mt-1 whitespace-pre-line ${isOpen ? '' : 'line-clamp-3'}`}>
-                          {item.description}
+                          {body}
                         </p>
                       )}
 

@@ -5,7 +5,7 @@ import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   ChevronDown, ChevronUp, MapPin, ExternalLink, AlertTriangle,
-  Newspaper, Clock, Radio, Maximize2, Minimize2
+  Newspaper, Clock, Radio, Maximize2, Minimize2, X
 } from 'lucide-react';
 
 interface LiveAlertsProps {
@@ -22,20 +22,62 @@ const RISK_COLORS: Record<string, string> = {
   LOW: '#00E676',
 };
 
-// Tab labels split into flag + text so spacing stays uniform across tabs —
-// inlining the emoji into the string left the flag tabs visually wider/detached.
 const TAB_META: Record<string, { flag?: string; text: string }> = {
   ukraine: { flag: '🇺🇦', text: 'UA WAR' },
   russia:  { flag: '🇷🇺', text: 'RU MILBLOG' },
   world:   { flag: '🌍', text: 'WORLD' },
 };
 
+const SESSION_STORAGE_KEY = 'osiris_dismissed_alerts';
+
+// Module-level set survives re-renders and component remounts within the same JS module lifetime.
+// Hydrated from sessionStorage on first use so dismissed IDs survive unmount/remount.
+const seenAlertIds = new Set<string>();
+let seenHydrated = false;
+
+function hydrateSeenFromStorage() {
+  if (seenHydrated || typeof sessionStorage === 'undefined') return;
+  seenHydrated = true;
+  try {
+    const raw = sessionStorage.getItem(SESSION_STORAGE_KEY);
+    if (raw) {
+      const ids: string[] = JSON.parse(raw);
+      ids.forEach(id => seenAlertIds.add(id));
+    }
+  } catch {}
+}
+
+function persistDismissed(id: string) {
+  seenAlertIds.add(id);
+  try {
+    const ids = Array.from(seenAlertIds);
+    sessionStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(ids));
+  } catch {}
+}
+
+function hashAlert(alert: any): string {
+  const type = alert.type ?? 'unknown';
+  const title = (alert.title ?? '').slice(0, 60);
+  const source = alert.source ?? '';
+  // Include the unique URL so distinct articles whose first 60 title chars match
+  // (common for war headlines) don't collide into one id — which would produce
+  // duplicate React keys and make a single dismiss drop multiple alerts.
+  const url = alert.url ?? alert.link ?? '';
+  return `${type}|${source}|${url}|${title}`;
+}
+
 export default function LiveAlerts({ data, onLocate, onWatchFeed }: LiveAlertsProps) {
+  hydrateSeenFromStorage();
+
   const [expanded, setExpanded] = useState(true);
   const [maximized, setMaximized] = useState(false);
-  const [filter, setFilter] = useState<'all' | 'ukraine' | 'russia' | 'world' | 'news' | 'quakes' | 'feeds'>('all');
-  // Per-item full-text toggle (news rows expand to show the entire story).
+  const [filter, setFilter] = useState<'all' | 'ukraine' | 'russia' | 'world' | 'news' | 'quakes'>('all');
+  const [sourcesOpen, setSourcesOpen] = useState(false);
   const [expandedItems, setExpandedItems] = useState<Set<string>>(new Set());
+  // Track dismissed IDs in component state so the UI re-renders on dismiss.
+  // seenAlertIds (module-level) is the authoritative source; this mirrors it for reactivity.
+  const [dismissedIds, setDismissedIds] = useState<Set<string>>(new Set(seenAlertIds));
+
   const toggleItem = (key: string) =>
     setExpandedItems(prev => {
       const next = new Set(prev);
@@ -43,7 +85,16 @@ export default function LiveAlerts({ data, onLocate, onWatchFeed }: LiveAlertsPr
       return next;
     });
 
-  // Built-in live feeds — verified video IDs (synced with /api/live-news)
+  const dismissAlert = (id: string) => {
+    persistDismissed(id);
+    setDismissedIds(new Set(seenAlertIds));
+  };
+
+  const dismissGroup = (groupKey: string, groupAlerts: any[]) => {
+    groupAlerts.forEach(a => persistDismissed(hashAlert(a)));
+    setDismissedIds(new Set(seenAlertIds));
+  };
+
   const BUILTIN_FEEDS = [
     // ── North America ──
     { name: 'NBC News NOW', city: 'New York', country: 'US', lat: 40.759, lng: -73.980, url: 'https://www.youtube-nocookie.com/embed/live_stream?channel=UCeY0bbntWzzVIaj2z3QigXg&autoplay=1&mute=1', category: 'mainstream', region: 'americas' },
@@ -79,8 +130,6 @@ export default function LiveAlerts({ data, onLocate, onWatchFeed }: LiveAlertsPr
     { name: 'teleSUR EN', city: 'Caracas', country: 'VE', lat: 10.491, lng: -66.902, url: 'https://www.youtube-nocookie.com/embed/live_stream?channel=UCmuTmpLY35O3csvhyA6vrkg&autoplay=1&mute=1', category: 'mainstream', region: 'americas' },
   ];
 
-  // Ukrainian / Russia-Ukraine war OSINT Telegram channels (monitored by /api/news).
-  // Always listed as intel sources; SOURCE link opens the channel web preview.
   const TELEGRAM_SOURCES = [
     { name: 'DeepState UA', channel: 'DeepStateUA', side: 'ua' },
     { name: 'WarTranslated', channel: 'wartranslated', side: 'ua' },
@@ -92,7 +141,6 @@ export default function LiveAlerts({ data, onLocate, onWatchFeed }: LiveAlertsPr
     { name: 'Ukraine War Report', channel: 'UkraineWarReport', side: 'ua' },
     { name: 'OSINTtechnical', channel: 'OSINTtechnical', side: 'ua' },
     { name: 'Faytuks', channel: 'Faytuks', side: 'ua' },
-    // Ukrainian-language (Cyrillic) channels
     { name: 'Суспільне Новини', channel: 'suspilne_news', side: 'ua' },
     { name: 'Громадське', channel: 'hromadske_ua', side: 'ua' },
     { name: 'Труха⚡️Україна', channel: 'truexanewsua', side: 'ua' },
@@ -100,7 +148,6 @@ export default function LiveAlerts({ data, onLocate, onWatchFeed }: LiveAlertsPr
     { name: 'Оперативно ЗСУ', channel: 'operativnoZSU', side: 'ua' },
     { name: 'Бутусов Плюс', channel: 'butusovplus', side: 'ua' },
     { name: 'Цаплієнко', channel: 'Tsaplienko', side: 'ua' },
-    // Russian milblogger / MoD channels (adversary picture).
     { name: 'Военный осведомитель', channel: 'milinfolive', side: 'ru' },
     { name: 'WarGonzo', channel: 'wargonzo', side: 'ru' },
     { name: 'Поддубный', channel: 'epoddubny', side: 'ru' },
@@ -112,12 +159,11 @@ export default function LiveAlerts({ data, onLocate, onWatchFeed }: LiveAlertsPr
   ];
 
   // Build unified alert feed
-  const alerts: any[] = [];
+  const allAlerts: any[] = [];
 
-  // OSINT Telegram News Feed (from /api/news)
   if (data.news) {
     data.news.forEach((a: any) => {
-      alerts.push({
+      allAlerts.push({
         type: 'news', title: a.title, description: a.description, source: a.source,
         side: a.side || 'world',
         lat: a.coords?.[0], lng: a.coords?.[1], time: a.published,
@@ -127,10 +173,9 @@ export default function LiveAlerts({ data, onLocate, onWatchFeed }: LiveAlertsPr
     });
   }
 
-  // Earthquakes
   if (data.earthquakes) {
     data.earthquakes.slice(0, 5).forEach((eq: any) => {
-      alerts.push({
+      allAlerts.push({
         type: 'quake', title: `M${eq.magnitude} - ${eq.place}`, source: 'USGS',
         lat: eq.lat, lng: eq.lng, time: eq.time,
         severity: eq.magnitude >= 6 ? 'CRITICAL' : eq.magnitude >= 4.5 ? 'HIGH' : 'MODERATE',
@@ -138,34 +183,44 @@ export default function LiveAlerts({ data, onLocate, onWatchFeed }: LiveAlertsPr
     });
   }
 
-  // Built-in live feeds (always present)
-  BUILTIN_FEEDS.forEach(f => {
-    alerts.push({
-      type: 'feed', title: f.name,
-      source: `${f.city}, ${f.country}`,
-      lat: f.lat, lng: f.lng,
-      feedUrl: f.url, severity: 'LOW', category: f.category,
-    });
+  // BUILTIN_FEEDS and TELEGRAM_SOURCES are rendered in a separate demoted "SOURCES" section
+  // below the alert list — not in allAlerts — so they don't inflate counts or crowd live alerts.
+
+  // Sort newest-first; feeds (no time) go to the end.
+  allAlerts.sort((a, b) => {
+    if (!a.time && !b.time) return 0;
+    if (!a.time) return 1;
+    if (!b.time) return -1;
+    return new Date(b.time).getTime() - new Date(a.time).getTime();
   });
 
-  // Ukrainian Telegram intel sources (always listed; open channel externally)
-  TELEGRAM_SOURCES.forEach(t => {
-    alerts.push({
-      type: 'feed', title: t.name,
-      source: `t.me/${t.channel}`,
-      side: t.side,
-      severity: 'LOW', category: 'conflict',
-      url: `https://t.me/s/${t.channel}`,
-    });
-  });
+  // Assign stable IDs and filter out dismissed alerts.
+  const alertsWithIds = allAlerts.map(a => ({ ...a, _id: hashAlert(a) }));
+  const visibleAlerts = alertsWithIds.filter(a => !dismissedIds.has(a._id));
 
-  const filtered = filter === 'all'     ? alerts.filter(a => a.type !== 'feed') :
-    filter === 'ukraine' ? alerts.filter(a => a.type === 'news' && a.side === 'ua') :
-    filter === 'russia'  ? alerts.filter(a => a.type === 'news' && a.side === 'ru') :
-    filter === 'world'   ? alerts.filter(a => a.type === 'news' && a.side === 'world') :
-    filter === 'news'    ? alerts.filter(a => a.type === 'news') :
-    filter === 'quakes'  ? alerts.filter(a => a.type === 'quake') :
-    alerts.filter(a => a.type === 'feed');
+  const filtered = filter === 'ukraine' ? visibleAlerts.filter(a => a.type === 'news' && a.side === 'ua') :
+    filter === 'russia'  ? visibleAlerts.filter(a => a.type === 'news' && a.side === 'ru') :
+    filter === 'world'   ? visibleAlerts.filter(a => a.type === 'news' && a.side === 'world') :
+    filter === 'news'    ? visibleAlerts.filter(a => a.type === 'news') :
+    filter === 'quakes'  ? visibleAlerts.filter(a => a.type === 'quake') :
+    visibleAlerts;
+
+  // Group by alert.type (fallback: alert.side, then 'general').
+  const groupKey = (a: any): string => a.type ?? a.side ?? 'general';
+
+  const groups: Map<string, any[]> = new Map();
+  for (const a of filtered) {
+    const k = groupKey(a);
+    if (!groups.has(k)) groups.set(k, []);
+    groups.get(k)!.push(a);
+  }
+
+  const GROUP_LABEL: Record<string, string> = {
+    news: 'NEWS INTEL',
+    quake: 'SEISMIC',
+    feed: 'LIVE FEEDS',
+    general: 'GENERAL',
+  };
 
   const getIcon = (type: string) => {
     switch (type) {
@@ -176,7 +231,6 @@ export default function LiveAlerts({ data, onLocate, onWatchFeed }: LiveAlertsPr
     }
   };
 
-  // Ensure portal only renders on client
   const [mounted, setMounted] = useState(false);
   useEffect(() => setMounted(true), []);
 
@@ -187,7 +241,7 @@ export default function LiveAlerts({ data, onLocate, onWatchFeed }: LiveAlertsPr
       transition={{ delay: 0.5, duration: 0.6 }}
       className={`glass-panel flex flex-col overflow-hidden pointer-events-auto transition-all duration-300 ${maximized ? 'fixed inset-4 z-[9999] bg-[#0a0a09]/95 backdrop-blur-3xl' : expanded ? 'shrink-0 h-[500px] max-h-[80vh] resize-y' : 'shrink-0'}`}
     >
-      {/* Header - Fixed Height, Never Shrinks */}
+      {/* Header */}
       <div
         onClick={() => setExpanded(!expanded)}
         role="button"
@@ -197,9 +251,6 @@ export default function LiveAlerts({ data, onLocate, onWatchFeed }: LiveAlertsPr
         <div className="flex items-center gap-2">
           <Radio className="w-3.5 h-3.5 text-[#FF4081]" />
           <span className="hud-text text-[10px] text-[var(--text-primary)]">LIVE ALERTS</span>
-          <span className="gotham-tag gotham-tag--critical" style={{ fontSize: '7px', padding: '1px 5px' }}>{alerts.filter(a => a.type === 'news' && a.side === 'ua').length} UA</span>
-          <span className="gotham-tag" style={{ fontSize: '7px', padding: '1px 5px', color: '#5B8FF9', borderColor: 'rgba(91,143,249,0.5)' }}>{alerts.filter(a => a.type === 'news' && a.side === 'ru').length} RU</span>
-          <span className="gotham-tag gotham-tag--info" style={{ fontSize: '7px', padding: '1px 4px' }}>{alerts.filter(a => a.type === 'news' && a.side === 'world').length} WORLD</span>
         </div>
         <div className="flex items-center gap-2">
           <div className="w-1.5 h-1.5 rounded-full bg-[#FF4081] animate-osiris-pulse" />
@@ -219,9 +270,9 @@ export default function LiveAlerts({ data, onLocate, onWatchFeed }: LiveAlertsPr
             transition={{ duration: 0.2 }}
             className={`flex flex-col flex-1 min-h-0 ${maximized ? 'bg-[#0a0a09]' : 'bg-transparent'}`}
           >
-            {/* Filters - Fixed Height, Never Shrinks */}
+            {/* Filters */}
             <div className={`flex-shrink-0 flex flex-wrap gap-1 ${maximized ? 'px-6 py-4 border-b border-[#2A2A28] bg-[#111111]' : 'px-3 py-2 border-b border-[rgba(255,255,255,0.05)]'}`}>
-              {(['all', 'ukraine', 'russia', 'world', 'news', 'quakes', 'feeds'] as const).map(f => {
+              {(['all', 'ukraine', 'russia', 'world', 'news', 'quakes'] as const).map(f => {
                 const meta = TAB_META[f] ?? { text: f.toUpperCase() };
                 return (
                 <button
@@ -242,101 +293,166 @@ export default function LiveAlerts({ data, onLocate, onWatchFeed }: LiveAlertsPr
               })}
             </div>
 
-            {/* Alert List - Internally Scrolling */}
+            {/* Alert List */}
             <div className={`flex-1 overflow-y-auto styled-scrollbar ${maximized ? 'p-6' : 'p-3'}`}>
-              <div className="space-y-2">
-                {filtered.map((alert, i) => {
-                  const Icon = getIcon(alert.type);
-                const sevColor = RISK_COLORS[alert.severity] || '#FFD700';
-                const itemKey = `${alert.type}-${alert.source ?? ''}-${alert.title ?? ''}-${i}`;
-                const isItemExpanded = expandedItems.has(itemKey);
-                const isNews = alert.type === 'news';
-                return (
-                  <div
-                    key={itemKey}
-                    onClick={() => {
-                      if (alert.lat !== undefined && alert.lng !== undefined) {
-                        onLocate(alert.lat, alert.lng);
-                      }
-                      if (alert.feedUrl && onWatchFeed) {
-                        onWatchFeed(alert.feedUrl, alert.title);
-                      }
-                    }}
-                    className="w-full text-left p-2.5 rounded-lg bg-[#111111]/60 border border-[#2A2A28] hover:bg-[#1A1A1A] transition-all hover:border-[#3A3A38] group cursor-pointer"
-                  >
-                    <div className="flex items-start gap-2.5">
-                      {/* Severity indicator */}
-                      <div className="flex-shrink-0 mt-1">
-                        <div className="w-2 h-2 rounded-full" style={{ backgroundColor: sevColor, boxShadow: `0 0 6px ${sevColor}60` }} />
-                      </div>
-
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-start gap-1.5 mb-1">
-                          <Icon className="w-3 h-3 flex-shrink-0 mt-0.5" style={{ color: sevColor }} />
-                          {isNews ? (
-                            <button
-                              onClick={(e) => { e.stopPropagation(); toggleItem(itemKey); }}
-                              className="min-w-0 flex-1 text-left"
-                              title={isItemExpanded ? 'Collapse' : 'Show full text'}
-                            >
-                              {alert.title && (
-                                <span className={`block text-[10px] font-mono font-semibold text-[var(--text-primary)] leading-snug ${isItemExpanded ? '' : 'line-clamp-2'}`}>
-                                  {alert.title}
-                                </span>
-                              )}
-                              {alert.description && alert.description !== alert.title && (
-                                <span className={`block text-[10px] font-mono text-[var(--text-secondary)] leading-snug mt-0.5 ${isItemExpanded ? '' : 'line-clamp-4'}`}>
-                                  {alert.description}
-                                </span>
-                              )}
-                            </button>
-                          ) : (
-                            <span className="text-[10px] font-mono text-[var(--text-primary)] truncate leading-tight">
-                              {alert.title}
-                            </span>
-                          )}
-                        </div>
-                        <div className="flex items-center justify-between border-t border-[#2A2A28]/50 pt-1.5 mt-1.5">
-                          <div className="flex items-center gap-2">
-                            <span className="text-[9px] font-mono text-[#8A8880] uppercase tracking-wider">{alert.source}</span>
-                            {alert.time && (
-                              <span className="text-[9px] font-mono text-[#5C5A54] flex items-center gap-1 border-l border-[#2A2A28] pl-2">
-                                <Clock className="w-2.5 h-2.5" />
-                                {new Date(alert.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                              </span>
-                            )}
-                          </div>
-                          {alert.url && (
-                            <a 
-                              href={alert.url} 
-                              target="_blank" 
-                              rel="noopener noreferrer" 
-                              className="text-[8px] font-mono text-[var(--cyan-primary)] hover:underline"
-                              onClick={(e) => e.stopPropagation()}
-                            >
-                              SOURCE
-                            </a>
-                          )}
-                        </div>
-                      </div>
-
-                      {/* Fly-to icon — column is always reserved (even with no coords) so
-                          the footer's SOURCE link aligns to the same right edge on every row */}
-                      <div className="w-3 flex-shrink-0 mt-0.5">
-                        {alert.lat !== undefined && (
-                          <MapPin className="w-3 h-3 text-[var(--text-muted)] opacity-0 group-hover:opacity-100 transition-opacity" />
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-              </div>
-              {filtered.length === 0 && (
+              {groups.size === 0 ? (
                 <div className="text-center py-4 text-[10px] font-mono text-[var(--text-muted)]">
                   No alerts for this filter
                 </div>
+              ) : (
+                <div className="space-y-3">
+                  {Array.from(groups.entries()).map(([gk, groupAlerts]) => (
+                    <div key={gk}>
+                      {/* Group header */}
+                      <div className="flex items-center justify-between mb-1.5 px-1">
+                        <span className="text-[9px] font-mono tracking-widest text-[var(--text-muted)] uppercase">
+                          {GROUP_LABEL[gk] ?? gk.toUpperCase()} ({groupAlerts.length})
+                        </span>
+                        <button
+                          onClick={() => dismissGroup(gk, groupAlerts)}
+                          title="Dismiss all in group"
+                          className="text-[8px] font-mono text-[#5C5A54] hover:text-[#FF4081] transition-colors flex items-center gap-1"
+                        >
+                          <X className="w-2.5 h-2.5" />
+                          DISMISS ALL
+                        </button>
+                      </div>
+
+                      <div className="space-y-2">
+                        {groupAlerts.map((alert) => {
+                          const Icon = getIcon(alert.type);
+                          const sevColor = RISK_COLORS[alert.severity] || '#FFD700';
+                          const isItemExpanded = expandedItems.has(alert._id);
+                          const isNews = alert.type === 'news';
+                          return (
+                            <div
+                              key={alert._id}
+                              onClick={() => {
+                                if (alert.lat !== undefined && alert.lng !== undefined) {
+                                  onLocate(alert.lat, alert.lng);
+                                }
+                                if (alert.feedUrl && onWatchFeed) {
+                                  onWatchFeed(alert.feedUrl, alert.title);
+                                }
+                              }}
+                              className="w-full text-left p-2.5 rounded-lg bg-[#111111]/60 border border-[#2A2A28] hover:bg-[#1A1A1A] transition-all hover:border-[#3A3A38] group cursor-pointer"
+                            >
+                              <div className="flex items-start gap-2.5">
+                                {/* Severity indicator */}
+                                <div className="flex-shrink-0 mt-1">
+                                  <div className="w-2 h-2 rounded-full" style={{ backgroundColor: sevColor, boxShadow: `0 0 6px ${sevColor}60` }} />
+                                </div>
+
+                                <div className="flex-1 min-w-0">
+                                  <div className="flex items-start gap-1.5 mb-1">
+                                    <Icon className="w-3 h-3 flex-shrink-0 mt-0.5" style={{ color: sevColor }} />
+                                    {isNews ? (
+                                      <button
+                                        onClick={(e) => { e.stopPropagation(); toggleItem(alert._id); }}
+                                        className="min-w-0 flex-1 text-left"
+                                        title={isItemExpanded ? 'Collapse' : 'Show full text'}
+                                      >
+                                        {alert.title && (
+                                          <span className={`block text-[10px] font-mono font-semibold text-[var(--text-primary)] leading-snug ${isItemExpanded ? '' : 'line-clamp-2'}`}>
+                                            {alert.title}
+                                          </span>
+                                        )}
+                                        {alert.description && alert.description !== alert.title && (
+                                          <span className={`block text-[10px] font-mono text-[var(--text-secondary)] leading-snug mt-0.5 ${isItemExpanded ? '' : 'line-clamp-4'}`}>
+                                            {alert.description}
+                                          </span>
+                                        )}
+                                      </button>
+                                    ) : (
+                                      <span className="text-[10px] font-mono text-[var(--text-primary)] truncate leading-tight">
+                                        {alert.title}
+                                      </span>
+                                    )}
+                                  </div>
+                                  <div className="flex items-center justify-between border-t border-[#2A2A28]/50 pt-1.5 mt-1.5">
+                                    <div className="flex items-center gap-2">
+                                      <span className="text-[9px] font-mono text-[#8A8880] uppercase tracking-wider">{alert.source}</span>
+                                      {alert.time && (
+                                        <span className="text-[9px] font-mono text-[#5C5A54] flex items-center gap-1 border-l border-[#2A2A28] pl-2">
+                                          <Clock className="w-2.5 h-2.5" />
+                                          {new Date(alert.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                        </span>
+                                      )}
+                                    </div>
+                                    {alert.url && (
+                                      <a
+                                        href={alert.url}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className="text-[8px] font-mono text-[var(--cyan-primary)] hover:underline"
+                                        onClick={(e) => e.stopPropagation()}
+                                      >
+                                        SOURCE
+                                      </a>
+                                    )}
+                                  </div>
+                                </div>
+
+                                {/* Right column: fly-to pin + dismiss button */}
+                                <div className="flex flex-col items-center gap-1 flex-shrink-0 mt-0.5">
+                                  {alert.lat !== undefined && (
+                                    <MapPin className="w-3 h-3 text-[var(--text-muted)] opacity-0 group-hover:opacity-100 transition-opacity" />
+                                  )}
+                                  <button
+                                    onClick={(e) => { e.stopPropagation(); dismissAlert(alert._id); }}
+                                    title="Dismiss"
+                                    className="opacity-0 group-hover:opacity-100 transition-opacity text-[#5C5A54] hover:text-[#FF4081]"
+                                  >
+                                    <X className="w-2.5 h-2.5" />
+                                  </button>
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ))}
+                </div>
               )}
+
+              {/* ── Channel directory — demoted below the live alert stream ── */}
+              <div className="flex-shrink-0 border-t border-[rgba(255,255,255,0.05)] mt-1">
+                <button
+                  onClick={() => setSourcesOpen(o => !o)}
+                  className="w-full flex items-center justify-between px-3 py-1.5 text-[9px] font-mono text-[#5C5A54] hover:text-[#8A8880] transition-colors"
+                >
+                  <span className="tracking-widest">SOURCES ({BUILTIN_FEEDS.length + TELEGRAM_SOURCES.length})</span>
+                  {sourcesOpen ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+                </button>
+                {sourcesOpen && (
+                  <div className="px-3 pb-2 grid grid-cols-2 gap-1 max-h-40 overflow-y-auto">
+                    {BUILTIN_FEEDS.map(f => (
+                      <button
+                        key={f.url}
+                        onClick={() => onWatchFeed?.(f.url, f.name)}
+                        className="text-left text-[9px] font-mono text-[#8A8880] hover:text-[var(--cyan-primary)] truncate py-0.5"
+                        title={`${f.name} — ${f.city}, ${f.country}`}
+                      >
+                        {f.name}
+                      </button>
+                    ))}
+                    {TELEGRAM_SOURCES.map(t => (
+                      <a
+                        key={t.channel}
+                        href={`https://t.me/s/${t.channel}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-[9px] font-mono text-[#8A8880] hover:text-[var(--cyan-primary)] truncate py-0.5"
+                        title={t.name}
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        {t.name}
+                      </a>
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
           </motion.div>
         )}

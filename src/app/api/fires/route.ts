@@ -8,6 +8,11 @@ export const dynamic = 'force-dynamic';
  * Multi-source: NASA FIRMS Open Data (primary for global fires), NASA EONET (volcanoes)
  */
 
+const CACHE_TTL = 60_000;
+interface CachedResponse { fires: FirePoint[]; source: string; timestamp: string }
+let cache: CachedResponse | null = null;
+let lastFetch = 0;
+
 interface FirePoint {
   lat: number;
   lng: number;
@@ -21,6 +26,11 @@ interface FirePoint {
 }
 
 export async function GET() {
+  const now = Date.now();
+  if (cache && now - lastFetch < CACHE_TTL) {
+    return NextResponse.json(cache, { headers: { 'Cache-Control': 'public, s-maxage=60, stale-while-revalidate=120' } });
+  }
+
   try {
     let fires: FirePoint[] = [];
     let source = '';
@@ -78,15 +88,10 @@ export async function GET() {
       }
     } catch (e) { console.warn('[OSIRIS] Suppressed EONET error:', e instanceof Error ? e.message : e); }
 
-    return NextResponse.json({
-      fires,
-      total: fires.length,
-      source: source || 'Unknown',
-      timestamp: new Date().toISOString(),
-    }, {
-      headers: {
-        'Cache-Control': 'public, s-maxage=600, stale-while-revalidate=1200',
-      },
+    cache = { fires, source: source || 'Unknown', timestamp: new Date().toISOString() };
+    lastFetch = now;
+    return NextResponse.json({ ...cache, total: fires.length }, {
+      headers: { 'Cache-Control': 'public, s-maxage=60, stale-while-revalidate=120' },
     });
   } catch (error) {
     console.error('Fire fetch error:', error);

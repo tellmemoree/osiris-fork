@@ -45,8 +45,12 @@ const OUTAGE_TERMS = [
 // Stems (lowercase Cyrillic) → canonical OBLAST_COORDS key.
 // Each oblast gets BOTH its standard adjective stem AND its -щина/-ч(ч)ина
 // colloquial form, because Telegram channels use both interchangeably
-// (e.g. "Сумщині" vs "Сумській области").  Longer/more-specific stems come
-// first so a longer match wins before a short prefix fires.
+// (e.g. "Сумщині" vs "Сумській области").
+//
+// Kyiv note: 'київ' is a prefix of 'київськ'/'київщин', so a naive includes()
+// loop would fire the city stem on every oblast post.  We split Kyiv into two
+// separate stem groups (see KYIV_OBLAST_STEMS / KYIV_CITY_STEMS) and handle
+// the disambiguation in extractRegions() rather than relying on table order.
 const REGION_STEMS: Array<[string, string]> = [
   ['вінниц',            'Vinnytska Oblast'],
   ['волин',             'Volynska Oblast'],
@@ -58,9 +62,7 @@ const REGION_STEMS: Array<[string, string]> = [
   ['закарпат',          'Zakarpatska Oblast'],
   ['запоріж',           'Zaporizka Oblast'],
   ['івано-франківськ',  'Ivano-Frankivska Oblast'],
-  ['київськ',           'Kyivska Oblast'],
-  ['київщин',           'Kyivska Oblast'],    // Київщині
-  ['київ',              'Kyiv City'],
+  // Kyiv stems are NOT listed here — handled by the dedicated sets below.
   ['кіровоград',        'Kirovohradska Oblast'],
   ['кропивниц',         'Kirovohradska Oblast'],
   ['луган',             'Luhanska Oblast'],   // Луганщині / Луганській
@@ -84,6 +86,16 @@ const REGION_STEMS: Array<[string, string]> = [
   ['чернів',            'Chernivtetska Oblast'],
   ['чернігів',          'Chernihivska Oblast'],
 ];
+
+// Oblast-specific Kyiv stems.  Any of these → Kyivska Oblast only.
+// These are longer than the city stem and would absorb city matches in a naive
+// prefix scan, so they are checked first and independently.
+const KYIV_OBLAST_STEMS = ['київськ', 'київщин'];
+
+// City-specific Kyiv stems.  Checked only when NO oblast stem fired.
+// 'київ'   — nominative/genitive/many compound forms (Київ, Києву, etc.)
+// 'києв'   — locative stem (У Києві, Київ→Києві) — was previously missing
+const KYIV_CITY_STEMS   = ['києв', 'київ'];
 
 const OBLAST_COORDS: Record<string, [number, number]> = {
   'Vinnytska Oblast':        [49.233,  28.468],
@@ -183,11 +195,35 @@ function classifySeverity(text: string): OutageSeverity {
 function extractRegions(text: string): string[] {
   const lower = text.toLowerCase();
   const found: string[] = [];
-  for (const [stem, oblast] of REGION_STEMS) {
-    if (lower.includes(stem) && !found.includes(oblast)) {
-      found.push(oblast);
+
+  // Non-Kyiv regions: straightforward stem scan.
+  for (const [stem, region] of REGION_STEMS) {
+    if (lower.includes(stem) && !found.includes(region)) {
+      found.push(region);
     }
   }
+
+  // Kyiv disambiguation — deterministic, not ordering-dependent:
+  //   1. Check for oblast-specific stems first ('київськ', 'київщин').
+  //      If any match → emit Kyivska Oblast.
+  //   2. Check for city-specific stems ('києв', 'київ') independently.
+  //      'києв' catches the locative form "У Києві".
+  //      'київ' catches nominative/genitive forms.
+  //      If any city stem matches AND no oblast stem matched → emit Kyiv City.
+  //      This prevents the short 'київ' prefix from bleeding into oblast posts.
+  const oblastStemMatched = KYIV_OBLAST_STEMS.some(s => lower.includes(s));
+  const cityStemMatched   = KYIV_CITY_STEMS.some(s => lower.includes(s));
+
+  if (oblastStemMatched) {
+    found.push('Kyivska Oblast');
+  }
+  // City is emitted only when a city-specific stem matched WITHOUT an oblast
+  // stem.  A post that says "Київська область" contains 'київ' but must not
+  // also color the city — oblastStemMatched guards that case.
+  if (cityStemMatched && !oblastStemMatched) {
+    found.push('Kyiv City');
+  }
+
   return found;
 }
 

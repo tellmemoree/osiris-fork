@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { getThreatCorpus, matchOblasts, type TgMessage } from '@/lib/telegram-threats';
+import { getThreatCorpus, getStrikeReportCorpus, matchOblasts, type TgMessage } from '@/lib/telegram-threats';
 import { promises as fs } from 'fs';
 import path from 'path';
 
@@ -9,20 +9,37 @@ export const dynamic = 'force-dynamic';
 // Rolls a 48-hour log of fire-confirmed site hits to disk so analysts can
 // see what burned overnight after the FIRMS 12-hour active-fire window expires.
 
-const HITS_FILE = path.join(process.env.HOME ?? '/root', '.osiris-data', 'thermal-hits.json');
+const DATA_DIR = path.join(process.env.HOME ?? '/root', '.osiris-data');
+const HITS_FILE = path.join(DATA_DIR, 'thermal-hits.json');
+const THERMAL_RESPONSE_FILE = path.join(DATA_DIR, 'thermal-response.json');
 const HITS_TTL_MS = 48 * 60 * 60 * 1000;
 
 // ── Response cache + inflight coalescing ────────────────────────────────────
-// This is the heaviest route in the app (72-site corpus filter + news cross-ref
-// + blocking disk I/O). On a public, force-dynamic app every origin cache-miss
-// would otherwise re-run the whole pipeline. Match the news/missile/drone routes:
-// memoize the computed response briefly and share one computation across
-// concurrent misses (also serializes the thermal-hits.json read-modify-write).
 type ThermalResponse = { aois: unknown[]; counts: Record<string, number>; timestamp: string };
 const THERMAL_TTL_MS = 60_000;
 let cached: ThermalResponse | null = null;
 let cachedAt = 0;
 let inflight: Promise<ThermalResponse> | null = null;
+
+// Seed in-memory cache from last persisted response so the layer renders
+// immediately on cold start without waiting for a full pipeline re-run.
+fs.mkdir(DATA_DIR, { recursive: true })
+  .then(() => fs.readFile(THERMAL_RESPONSE_FILE, 'utf8'))
+  .then((txt) => {
+    const { response, savedAt } = JSON.parse(txt) as { response: ThermalResponse; savedAt: number };
+    if (!cached && response?.aois) {
+      cached = response;
+      cachedAt = savedAt;
+      console.log(`[OSIRIS] thermal-aoi: seeded ${response.aois.length} AOIs from disk (age ${Math.round((Date.now() - savedAt) / 1000)}s)`);
+    }
+  })
+  .catch(() => { /* no prior snapshot — first request runs the full pipeline */ });
+
+function persistThermalResponse(r: ThermalResponse) {
+  fs.mkdir(DATA_DIR, { recursive: true })
+    .then(() => fs.writeFile(THERMAL_RESPONSE_FILE, JSON.stringify({ response: r, savedAt: Date.now() })))
+    .catch(() => { /* best-effort — losing this only costs one cold-start delay */ });
+}
 
 interface StoredHit {
   id: string; name: string; category: string;
@@ -73,6 +90,11 @@ interface Site { id: string; name: string; category: Exclude<Category, 'news'>; 
 const BBOX = { latMin: 43, latMax: 71, lngMin: 19, lngMax: 66 };
 const SITE_RADIUS_KM = 12;   // airfields/yards sprawl; be inclusive
 const NEWS_RADIUS_KM = 15;   // news coords are city-level (and jittered)
+// Low-FRP fires below this threshold are suppressed unless a news article or
+// Telegram strike message corroborates the detection within the site radius.
+// Agriculture burns and industrial flares rarely exceed 50 MW; a struck
+// refinery or ammo depot burns significantly hotter.
+const NEWS_GATE_FRP_MW = 50;
 const FIRE_ACTIVE_MS = 12 * 60 * 60 * 1000;  // fires older than 12h don't sustain a "hit"
 
 const SITES: Site[] = [
@@ -118,7 +140,12 @@ const SITES: Site[] = [
   { id: 'oil-ryazan', name: 'Ryazan refinery', category: 'oil', lat: 54.61, lng: 39.69 },
   { id: 'oil-volgograd', name: 'Volgograd (Lukoil) refinery', category: 'oil', lat: 48.62, lng: 44.42 },
   { id: 'oil-novoshakhtinsk', name: 'Novoshakhtinsk refinery', category: 'oil', lat: 47.78, lng: 39.93 },
+  { id: 'oil-gukovo', name: 'Гуково oil depot / нафтобаза (Rostov oblast)', category: 'oil', lat: 48.05, lng: 39.94 },
   { id: 'oil-slavyansk', name: 'Slavyansk-na-Kubani refinery', category: 'oil', lat: 45.26, lng: 38.13 },
+  // Poltavskaya stanitsa oil depot (Krasnodar Krai) — Lukoil distribution hub between
+  // refineries and regional AZS networks. Use stems (полтавськ, нафтобаз) so keyword
+  // matching covers inflected Ukrainian forms (полтавській, нафтобазі).
+  { id: 'oil-poltavskaya', name: 'Poltavskaya / полтавськ нафтобаз oil depot (Krasnodar/Kuban, Lukoil hub)', category: 'oil', lat: 45.33, lng: 38.17 },
   { id: 'oil-ilsky', name: 'Ilsky refinery', category: 'oil', lat: 44.84, lng: 38.58 },
   { id: 'oil-afipsky', name: 'Afipsky refinery', category: 'oil', lat: 44.90, lng: 38.84 },
   { id: 'oil-krasnodar', name: 'Krasnodar refinery', category: 'oil', lat: 45.07, lng: 39.03 },
@@ -152,7 +179,7 @@ const SITES: Site[] = [
   { id: 'oil-nps-vtoroye', name: 'NPS Vtoroye — Transneft pipeline (Vladimir Oblast)', category: 'oil', lat: 56.40, lng: 41.85 },
   { id: 'oil-kizlyurt-gas', name: 'Gas infrastructure (Kizlyurt, Dagestan)', category: 'oil', lat: 43.21, lng: 46.87 },
   { id: 'oil-yaroslavl', name: 'Slavneft-YANOS refinery (Yaroslavl, 15M t/yr)', category: 'oil', lat: 57.55, lng: 39.81 },
-  { id: 'oil-kapotnya', name: 'Kapotnya refinery (Moscow, 40% of region fuel)', category: 'oil', lat: 55.64, lng: 37.80 },
+  { id: 'oil-kapotnya', name: 'Kapotnya Moscow NPZ / Московський НПЗ / Московский НПЗ (40% of region fuel)', category: 'oil', lat: 55.64, lng: 37.80 },
   { id: 'oil-ufa', name: 'Bashneft-UNPZ / Novoil refinery complex (Ufa, Bashkortostan)', category: 'oil', lat: 54.86, lng: 56.09 },
   // ── Petrochemical / military-industrial (struck June 2026) ──
   { id: 'ind-tolyattikauchuk', name: 'Tolyattikauchuk (Samara Oblast — synthetic rubber for armour/aviation)', category: 'oil', lat: 53.50, lng: 49.38 },
@@ -172,37 +199,172 @@ function distKm(aLat: number, aLng: number, bLat: number, bLng: number): number 
   return Math.sqrt(dLat * dLat + dLng * dLng) * 111.32;
 }
 
-async function fetchTheaterFires(): Promise<Fire[]> {
-  const sources = [
+// FIRMS area API bbox: W,S,E,N (matches BBOX constant above)
+const FIRMS_BBOX = `${BBOX.lngMin},${BBOX.latMin},${BBOX.lngMax},${BBOX.latMax}`;
+
+// All satellite sources fetched in parallel — not first-success fallbacks.
+// With key: area-API URLs (~50 KB each, 2-day window).
+// Without key: full 24h global CSVs (~15–20 MB each, same CSV schema).
+// NOAA-20 and NOAA-21 orbit ~50 min apart from Suomi-NPP, giving coverage
+// at different times of day and doubling the chance of catching a fresh fire.
+function firmsSources(): string[] {
+  const key = process.env.FIRMS_MAP_KEY;
+  if (key) {
+    return [
+      `https://firms.modaps.eosdis.nasa.gov/api/area/csv/${key}/VIIRS_SNPP_NRT/${FIRMS_BBOX}/2`,
+      `https://firms.modaps.eosdis.nasa.gov/api/area/csv/${key}/VIIRS_NOAA20_NRT/${FIRMS_BBOX}/2`,
+      `https://firms.modaps.eosdis.nasa.gov/api/area/csv/${key}/VIIRS_NOAA21_NRT/${FIRMS_BBOX}/2`,
+      `https://firms.modaps.eosdis.nasa.gov/api/area/csv/${key}/MODIS_NRT/${FIRMS_BBOX}/2`,
+    ];
+  }
+  return [
     'https://firms.modaps.eosdis.nasa.gov/data/active_fire/suomi-npp-viirs-c2/csv/SUOMI_VIIRS_C2_Global_24h.csv',
+    'https://firms.modaps.eosdis.nasa.gov/data/active_fire/noaa-20-viirs-c2/csv/J1_VIIRS_C2_Global_24h.csv',
+    'https://firms.modaps.eosdis.nasa.gov/data/active_fire/noaa-21-viirs-c2/csv/J2_VIIRS_C2_Global_24h.csv',
     'https://firms.modaps.eosdis.nasa.gov/data/active_fire/modis-c6.1/csv/MODIS_C6_1_Global_24h.csv',
   ];
-  for (const url of sources) {
-    try {
-      const res = await fetch(url, { signal: AbortSignal.timeout(15000), headers: { 'User-Agent': 'OSIRIS-Intelligence-Platform/3.5' } });
-      if (!res.ok) continue;
-      const text = await res.text();
-      const lines = text.trim().split('\n');
-      if (lines.length < 2 || !lines[0].includes('latitude')) continue;
-      const h = lines[0].split(',');
-      const li = h.indexOf('latitude'), gi = h.indexOf('longitude');
-      const bi = h.indexOf('bright_ti4') !== -1 ? h.indexOf('bright_ti4') : h.indexOf('brightness');
-      const di = h.indexOf('acq_date'), ti = h.indexOf('acq_time'), fi = h.indexOf('frp');
-      const fires: Fire[] = [];
-      for (let i = 1; i < lines.length && fires.length < 8000; i++) {
-        const c = lines[i].split(',');
-        const lat = parseFloat(c[li]), lng = parseFloat(c[gi]);
-        if (isNaN(lat) || isNaN(lng)) continue;
-        if (lat < BBOX.latMin || lat > BBOX.latMax || lng < BBOX.lngMin || lng > BBOX.lngMax) continue;
-        const acqTime = (c[ti] || '0000').padStart(4, '0');
-        const ts = new Date(`${c[di]}T${acqTime.slice(0, 2)}:${acqTime.slice(2, 4)}:00Z`).getTime();
-        fires.push({ lat, lng, frp: parseFloat(c[fi]) || 0, brightness: parseFloat(c[bi]) || 0, date: c[di] || '', time: c[ti] || '', ts: isNaN(ts) ? Date.now() : ts });
-      }
-      const cutoff = Date.now() - FIRE_ACTIVE_MS;
-      return fires.filter(f => f.ts >= cutoff);
-    } catch { continue; }
+}
+
+// Parse a FIRMS CSV text (any satellite — schema is identical across VIIRS/MODIS/NRT).
+function parseFirmsCsv(text: string): Fire[] {
+  const lines = text.trim().split('\n');
+  if (lines.length < 2 || !lines[0].includes('latitude')) return [];
+  const h = lines[0].split(',');
+  const li = h.indexOf('latitude'), gi = h.indexOf('longitude');
+  const bi = h.indexOf('bright_ti4') !== -1 ? h.indexOf('bright_ti4') : h.indexOf('brightness');
+  const di = h.indexOf('acq_date'), ti = h.indexOf('acq_time'), fi = h.indexOf('frp');
+  const fires: Fire[] = [];
+  for (let i = 1; i < lines.length && fires.length < 8000; i++) {
+    const c = lines[i].split(',');
+    const lat = parseFloat(c[li]), lng = parseFloat(c[gi]);
+    if (isNaN(lat) || isNaN(lng)) continue;
+    if (lat < BBOX.latMin || lat > BBOX.latMax || lng < BBOX.lngMin || lng > BBOX.lngMax) continue;
+    const acqTime = (c[ti] || '0000').padStart(4, '0');
+    const ts = new Date(`${c[di]}T${acqTime.slice(0, 2)}:${acqTime.slice(2, 4)}:00Z`).getTime();
+    fires.push({ lat, lng, frp: parseFloat(c[fi]) || 0, brightness: parseFloat(c[bi]) || 0, date: c[di] || '', time: c[ti] || '', ts: isNaN(ts) ? Date.now() : ts });
   }
-  return [];
+  return fires;
+}
+
+async function fetchOneFirmsSource(url: string): Promise<Fire[]> {
+  try {
+    const res = await fetch(url, { signal: AbortSignal.timeout(20000), headers: { 'User-Agent': 'OSIRIS-Intelligence-Platform/3.5' } });
+    if (!res.ok) return [];
+    return parseFirmsCsv(await res.text());
+  } catch { return []; }
+}
+
+// LSA-SAF FRP from Meteosat SEVIRI — 15-minute geostationary coverage of
+// Europe + western Russia. Requires free EUMETSAT account:
+//   register at https://eoportal.eumetsat.int → API → Consumer Key/Secret
+// Set EUMETSAT_CONSUMER_KEY + EUMETSAT_CONSUMER_SECRET to enable.
+// Returns [] gracefully when credentials are absent.
+async function fetchLsaSafFires(): Promise<Fire[]> {
+  const ck = process.env.EUMETSAT_CONSUMER_KEY;
+  const cs = process.env.EUMETSAT_CONSUMER_SECRET;
+  if (!ck || !cs) return [];
+  try {
+    // Step 1: OAuth2 client-credentials token
+    const tokenRes = await fetch('https://api.eumetsat.int/token', {
+      method: 'POST',
+      signal: AbortSignal.timeout(8000),
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: `grant_type=client_credentials&client_id=${encodeURIComponent(ck)}&client_secret=${encodeURIComponent(cs)}`,
+    });
+    if (!tokenRes.ok) return [];
+    const { access_token } = await tokenRes.json() as { access_token: string };
+
+    // Step 2: Fetch latest FRP-PIXEL product (MSG Meteosat SEVIRI, ~15-min cadence).
+    // Product collection: EO:EUM:DAT:MSG:FRP-PIXEL-IF
+    const searchRes = await fetch(
+      'https://api.eumetsat.int/data/search-products/1.0.0/datasets/EO:EUM:DAT:MSG:FRP-PIXEL-IF/temporal/latest?limit=1&format=json',
+      { signal: AbortSignal.timeout(10000), headers: { Authorization: `Bearer ${access_token}` } },
+    );
+    if (!searchRes.ok) return [];
+    const search = await searchRes.json() as any;
+    const productUrl = search?.products?.[0]?.links?.data?.[0]?.href;
+    if (!productUrl) return [];
+
+    // Step 3: Download the CSV hotspot extract (EUMETSAT provides a CSV alongside HDF5)
+    const dataRes = await fetch(productUrl, {
+      signal: AbortSignal.timeout(15000),
+      headers: { Authorization: `Bearer ${access_token}` },
+    });
+    if (!dataRes.ok) return [];
+    const text = await dataRes.text();
+    // LSA-SAF CSV columns: latitude,longitude,frp,date_time (ISO8601) — map to Fire schema
+    const lines = text.trim().split('\n');
+    if (lines.length < 2) return [];
+    const h = lines[0].split(',').map(c => c.trim().toLowerCase());
+    const li = h.indexOf('latitude'), gi = h.indexOf('longitude'), fi = h.indexOf('frp'), dti = h.indexOf('date_time');
+    if (li < 0 || gi < 0) return [];
+    const fires: Fire[] = [];
+    for (let i = 1; i < lines.length; i++) {
+      const c = lines[i].split(',');
+      const lat = parseFloat(c[li]), lng = parseFloat(c[gi]);
+      if (isNaN(lat) || isNaN(lng)) continue;
+      if (lat < BBOX.latMin || lat > BBOX.latMax || lng < BBOX.lngMin || lng > BBOX.lngMax) continue;
+      const ts = dti >= 0 ? new Date(c[dti].trim()).getTime() : Date.now();
+      const d = dti >= 0 ? c[dti].slice(0, 10) : '';
+      fires.push({ lat, lng, frp: parseFloat(c[fi]) || 0, brightness: 0, date: d, time: '', ts: isNaN(ts) ? Date.now() : ts });
+    }
+    return fires;
+  } catch { return []; }
+}
+
+// Merge fires from multiple satellite passes. Two satellites can detect the same
+// ignition: deduplicate within 1.5 km + 4 h window, keeping the highest FRP and
+// the freshest acquisition timestamp.
+function mergeFires(batches: Fire[][]): Fire[] {
+  // Grid-based spatial dedup: 0.015° lat cell ≈ 1.67 km covers the 1.5 km dedup radius.
+  // Longitude step is cosine-corrected so the cell stays ~1.5 km at all latitudes —
+  // without this, 0.015° lng ≈ 60 km at 55°N (cos(55°) ≈ 0.57), making the dedup
+  // window ~4× too wide in the east-west direction at high latitudes.
+  const LAT_STEP = 0.015;
+  const FOUR_H_MS = 4 * 60 * 60 * 1000;
+  const grid = new Map<string, Fire>();
+  const result: Fire[] = [];
+
+  for (const fire of batches.flat()) {
+    const cosLat = Math.cos(fire.lat * Math.PI / 180);
+    const lngStep = cosLat > 0.01 ? LAT_STEP / cosLat : LAT_STEP;
+    const cLat = Math.round(fire.lat / LAT_STEP);
+    const cLng = Math.round(fire.lng / lngStep);
+    let dup: Fire | undefined;
+    outer: for (let dLat = -1; dLat <= 1; dLat++) {
+      for (let dLng = -1; dLng <= 1; dLng++) {
+        const candidate = grid.get(`${cLat + dLat},${cLng + dLng}`);
+        if (candidate &&
+            distKm(fire.lat, fire.lng, candidate.lat, candidate.lng) < 1.5 &&
+            Math.abs(fire.ts - candidate.ts) < FOUR_H_MS) {
+          dup = candidate; break outer;
+        }
+      }
+    }
+    if (dup) {
+      if (fire.frp > dup.frp) { dup.frp = fire.frp; dup.brightness = Math.max(dup.brightness, fire.brightness); }
+      if (fire.ts > dup.ts) { dup.ts = fire.ts; dup.date = fire.date; dup.time = fire.time; }
+    } else {
+      const rep = { ...fire };
+      result.push(rep);
+      grid.set(`${cLat},${cLng}`, rep);
+    }
+  }
+  return result;
+}
+
+async function fetchTheaterFires(): Promise<Fire[]> {
+  const [firmsBatches, lsaSafFires] = await Promise.all([
+    Promise.allSettled(firmsSources().map(fetchOneFirmsSource)),
+    fetchLsaSafFires(),
+  ]);
+  const batches = firmsBatches
+    .filter((r): r is PromiseFulfilledResult<Fire[]> => r.status === 'fulfilled')
+    .map(r => r.value);
+  if (lsaSafFires.length) batches.push(lsaSafFires);
+
+  const cutoff = Date.now() - FIRE_ACTIVE_MS;
+  return mergeFires(batches).filter(f => f.ts >= cutoff);
 }
 
 async function fetchNews(req: Request): Promise<NewsItem[]> {
@@ -420,15 +582,20 @@ function extractBestSnippet(title: string, desc: string, placeName?: string): st
 
 async function computeThermal(req: Request): Promise<ThermalResponse> {
   try {
-    const [fires, news, tgCorpus] = await Promise.all([
+    const [fires, news, tgCorpus, tgReportCorpus] = await Promise.all([
       fetchTheaterFires(),
       fetchNews(req),
       getThreatCorpus(),
+      getStrikeReportCorpus(),
     ]);
+    // Merge threat corpus + strike-report corpus before filtering.
+    // tgReportCorpus comes from STRIKE_REPORT_CHANNELS (e.g. ssternenko) —
+    // after-action summaries kept out of drone/missile route builders.
+    const tgCorpusMerged: TgMessage[] = [...tgCorpus, ...tgReportCorpus];
 
     // Pre-filter Telegram corpus: keep only strike-related messages that are not
     // territorial-advance or interception-only reports (same gates as RSS news).
-    const tgStrike = tgCorpus.filter(msg => {
+    const tgStrike = tgCorpusMerged.filter(msg => {
       const fake: NewsItem = { title: msg.text.slice(0, 120), description: msg.text };
       return isStrikeRelated(fake) && !isTerritorialAdvance(fake) && !isInterceptionOnly(fake);
     });
@@ -452,6 +619,7 @@ async function computeThermal(req: Request): Promise<ThermalResponse> {
               snippet: msg.text.slice(0, 200).replace(/\n/g, ' '),
             }))
         : [];
+
       const tgText = tgSources.map(s => s.snippet).join(' ');
       aois.push({
         id: s.id, category: s.category, name: s.name, lat: s.lat, lng: s.lng,
@@ -464,52 +632,6 @@ async function computeThermal(req: Request): Promise<ThermalResponse> {
       });
     }
 
-    // News: only STRIKE-RELATED articles that are NOT territorial-advance reports,
-    // cross-referenced at EVERY place they name (one article often lists several struck
-    // targets — but only places with a corroborating fire within NEWS_RADIUS_KM surface,
-    // which is the whole point of the heuristic). Co-located corroborations (same ~0.1°
-    // /~11 km cell — different channels, or one strike reported by both sides) MERGE into a
-    // single AOI that carries EVERY contributing source, instead of whichever article was
-    // processed first silently winning (and mis-attributing) the marker.
-    type Contributor = { source?: string; side?: string; link?: string; title?: string; description?: string; hasVideo?: boolean; weapon?: string; snippet?: string };
-    type NewsAoi = {
-      id: string; category: 'news'; name: string; source?: string; side?: string; link?: string;
-      lat: number; lng: number; hit: boolean; fireCount: number; maxFrp: number; latest: string | null;
-      confidence: Confidence; sources: Contributor[]; bilateral: boolean; videoConfirmed: boolean; weapon?: string;
-    };
-    // Persist fire-confirmed site hits (48-hour rolling log) and annotate every site
-    // AOI with lastHit* fields so the popup can show "Last hit: Xh ago" even after
-    // the 12-hour FIRMS active-fire window has expired.
-    const currentHits: StoredHit[] = aois
-      .filter((a: any) => a.category !== 'news' && a.hit)
-      .map((a: any) => ({
-        id: a.id, name: a.name, category: a.category,
-        lat: a.lat, lng: a.lng,
-        confidence: a.confidence, maxFrp: a.maxFrp, fireCount: a.fireCount,
-        latest: a.latest, weapon: a.weapon,
-        ts: Date.now(),
-      }));
-    const allHits = await mergeAndSaveHits(currentHits);
-    const hitById = new Map(allHits.map((h: StoredHit) => [h.id, h]));
-    for (const aoi of aois as any[]) {
-      if (aoi.category === 'news') continue;
-      const h = hitById.get(aoi.id);
-      if (h && !aoi.hit) {
-        // Site is not currently burning but has a recent hit in history
-        aoi.lastHitTs   = h.ts;
-        aoi.lastHitConf = h.confidence;
-        aoi.lastHitFrp  = h.maxFrp;
-        aoi.lastHitWeapon = h.weapon;
-      } else if (aoi.hit) {
-        // Currently hit — record when we first confirmed it
-        const prev = hitById.get(aoi.id);
-        aoi.lastHitTs   = prev?.ts ?? Date.now();
-        aoi.lastHitConf = aoi.confidence;
-        aoi.lastHitFrp  = aoi.maxFrp;
-        aoi.lastHitWeapon = aoi.weapon;
-      }
-    }
-
     // Merge Telegram strike messages (with oblast-level coords) into the news pipeline.
     // Each TgMessage that names a UA oblast becomes a NewsItem at that centroid;
     // the same isStrikeRelated / deduplication / fire-crossref logic applies.
@@ -518,6 +640,12 @@ async function computeThermal(req: Request): Promise<ThermalResponse> {
       .filter((item): item is NewsItem => item !== null);
     const allNews = [...news, ...tgNewsItems];
 
+    type Contributor = { source?: string; side?: string; link?: string; title?: string; description?: string; hasVideo?: boolean; weapon?: string; snippet?: string };
+    type NewsAoi = {
+      id: string; category: 'news'; name: string; source?: string; side?: string; link?: string;
+      lat: number; lng: number; hit: boolean; fireCount: number; maxFrp: number; latest: string | null;
+      confidence: Confidence; sources: Contributor[]; bilateral: boolean; videoConfirmed: boolean; weapon?: string;
+    };
     const newsByCell = new Map<string, NewsAoi>();
     for (const n of allNews) {
       if (!isStrikeRelated(n) || isTerritorialAdvance(n) || isInterceptionOnly(n)) continue;
@@ -625,6 +753,54 @@ async function computeThermal(req: Request): Promise<ThermalResponse> {
     for (const a of newsByCell.values()) aois.push(a);
     const newsHits = newsByCell.size;
 
+    // ── False-positive gate ───────────────────────────────────────────────────
+    // Runs AFTER the news loop so videoConfirmed, sources (TG + news), and
+    // bilateral are all final. A site fire passes if ANY of:
+    //   • maxFrp ≥ NEWS_GATE_FRP_MW  (hot enough — struck refinery/depot)
+    //   • videoConfirmed              (video is strong independent evidence)
+    //   • sources.length > 0          (at least one TG or news corroboration)
+    // Low-FRP detections with zero corroboration are suppressed — agriculture
+    // burns, gas flares, and industrial heat sources rarely exceed ~20 MW and
+    // never generate strike reports.
+    for (const aoi of aois as any[]) {
+      if (aoi.category === 'news' || !aoi.hit) continue;
+      if (aoi.maxFrp >= NEWS_GATE_FRP_MW) continue;
+      if (aoi.videoConfirmed || aoi.sources.length > 0) continue;
+      aoi.hit = false; aoi.fireCount = 0; aoi.maxFrp = 0; aoi.latest = null; aoi.confidence = null;
+    }
+
+    // ── Persist confirmed hits + annotate lastHit fields ─────────────────────
+    // Runs after the gate so only evidence-backed detections enter the 48-hour
+    // rolling log. Annotations let the popup show "Last hit: Xh ago" after the
+    // 12-hour FIRMS active-fire window expires.
+    const currentHits: StoredHit[] = aois
+      .filter((a: any) => a.category !== 'news' && a.hit)
+      .map((a: any) => ({
+        id: a.id, name: a.name, category: a.category,
+        lat: a.lat, lng: a.lng,
+        confidence: a.confidence, maxFrp: a.maxFrp, fireCount: a.fireCount,
+        latest: a.latest, weapon: a.weapon,
+        ts: Date.now(),
+      }));
+    const allHits = await mergeAndSaveHits(currentHits);
+    const hitById = new Map(allHits.map((h: StoredHit) => [h.id, h]));
+    for (const aoi of aois as any[]) {
+      if (aoi.category === 'news') continue;
+      const h = hitById.get(aoi.id);
+      if (h && !aoi.hit) {
+        aoi.lastHitTs     = h.ts;
+        aoi.lastHitConf   = h.confidence;
+        aoi.lastHitFrp    = h.maxFrp;
+        aoi.lastHitWeapon = h.weapon;
+      } else if (aoi.hit) {
+        const prev = hitById.get(aoi.id);
+        aoi.lastHitTs     = prev?.ts ?? Date.now();
+        aoi.lastHitConf   = aoi.confidence;
+        aoi.lastHitFrp    = aoi.maxFrp;
+        aoi.lastHitWeapon = aoi.weapon;
+      }
+    }
+
     const siteHits = aois.filter(a => a.category !== 'news' && a.hit).length;
     const highConf = aois.filter(a => a.hit && a.confidence === 'high').length;
     return { aois, counts: { sites: SITES.length, site_hits: siteHits, news_hits: newsHits, high_confidence: highConf, fires_in_theater: fires.length }, timestamp: new Date().toISOString() };
@@ -644,14 +820,16 @@ export async function GET(req: Request) {
   // Coalesce concurrent cache-misses onto a single computation.
   if (!inflight) {
     inflight = computeThermal(req)
-      .then(r => { cached = r; cachedAt = Date.now(); return r; })
+      .then(r => { cached = r; cachedAt = Date.now(); persistThermalResponse(r); return r; })
       .finally(() => { inflight = null; });
   }
+  // Serve stale cache immediately (stale-while-revalidate in-process) — the
+  // recompute runs in the background and the next request gets fresh data.
+  // Only block when there's truly nothing to serve (first ever request).
+  if (cached) return NextResponse.json(cached, { headers: THERMAL_HEADERS });
   try {
     return NextResponse.json(await inflight, { headers: THERMAL_HEADERS });
   } catch {
-    // Serve stale cache if a refresh failed and we have one; else surface 500.
-    if (cached) return NextResponse.json(cached, { headers: THERMAL_HEADERS });
     return NextResponse.json({ aois: [], error: 'Failed to compute thermal AOIs' }, { status: 500 });
   }
 }

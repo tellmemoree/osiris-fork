@@ -5,7 +5,11 @@ import { stealthFetch } from '@/lib/stealthFetch';
  * OSIRIS — Severe Weather & Anomalies API
  * Fetches active natural events from NASA EONET and NOAA/NWS active alerts.
  * Tracks: Severe storms, volcanoes, sea ice, and U.S. active weather alerts.
+ *
+ * Cache: 30-min module-level cache — EONET/NOAA update on the order of hours.
  */
+
+const CACHE_TTL = 30 * 60_000; // 30 min — EONET/NOAA update hourly
 
 type Severity = 'low' | 'medium' | 'high';
 
@@ -24,6 +28,15 @@ type WeatherEvent = {
   source: string;
   provider: 'NASA EONET' | 'NOAA/NWS';
 };
+
+type WeatherPayload = {
+  events: WeatherEvent[];
+  total: number;
+  timestamp: string;
+};
+
+let cachedWeather: WeatherPayload | null = null;
+let lastFetch = 0;
 
 type EonetEvent = {
   id: string;
@@ -79,7 +92,18 @@ type NwsResponse = {
   features?: NwsFeature[];
 };
 
+const CACHE_HEADERS = {
+  'Cache-Control': 'public, s-maxage=1800, stale-while-revalidate=3600',
+} as const;
+
 export async function GET() {
+  const now = Date.now();
+
+  // Serve from module-level cache if fresh (30-min TTL)
+  if (cachedWeather && now - lastFetch < CACHE_TTL) {
+    return NextResponse.json(cachedWeather, { headers: CACHE_HEADERS });
+  }
+
   try {
     const [eonetRes, nwsRes] = await Promise.allSettled([
       stealthFetch('https://eonet.gsfc.nasa.gov/api/v3/events?status=open&limit=100', {
@@ -122,7 +146,13 @@ export async function GET() {
           } else if (category === 'volcanoes') {
             typeLabel = 'Volcano Eruption';
             icon = 'volcano';
-            severity = 'high';
+            // Age-gate: skip eruptions older than 14 days (data stays in EONET open-events far longer)
+            const eventMs = geom.date ? new Date(geom.date).getTime() : 0;
+            const ageMs = Date.now() - eventMs;
+            if (ageMs > 14 * 24 * 60 * 60 * 1000) continue;
+            // Recency-derived severity: fresher eruptions are more operationally relevant
+            severity = ageMs < 3 * 24 * 60 * 60 * 1000 ? 'high'
+              : ageMs < 7 * 24 * 60 * 60 * 1000 ? 'medium' : 'low';
           } else if (category === 'seaIce') {
             typeLabel = 'Iceberg / Sea Ice';
             icon = 'ice';
@@ -184,16 +214,28 @@ export async function GET() {
     }
 
     if (!providerSucceeded) {
+      // Serve stale cache rather than an empty error response if we have one
+      if (cachedWeather) {
+        return NextResponse.json(cachedWeather, { headers: CACHE_HEADERS });
+      }
       return NextResponse.json({ events: [], error: 'Failed to fetch weather data' }, { status: 500 });
     }
 
-    return NextResponse.json({
+    const payload: WeatherPayload = {
       events,
       total: events.length,
       timestamp: new Date().toISOString(),
-    });
+    };
+    cachedWeather = payload;
+    lastFetch = now;
+
+    return NextResponse.json(payload, { headers: CACHE_HEADERS });
   } catch (error) {
     console.error('Weather API error:', error);
+    // Serve stale cache on unexpected errors
+    if (cachedWeather) {
+      return NextResponse.json(cachedWeather, { headers: CACHE_HEADERS });
+    }
     return NextResponse.json({ events: [], error: 'Failed to fetch weather data' }, { status: 500 });
   }
 }

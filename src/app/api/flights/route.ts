@@ -1,21 +1,28 @@
 
 import { NextResponse } from 'next/server';
 import { stealthFetch } from '@/lib/stealthFetch';
+import { loadDb, lookupAircraft } from '@/lib/aircraftDb';
 
 /**
  * OSIRIS — Flight Data API
- * Fetches real-time aircraft positions from adsb.lol (no API key required)
- * Covers 6 global regions for maximum coverage
+ *
+ * Data source: OpenSky Network /api/states/all (global, no API key needed).
+ *
+ * Why not adsb.lol: their server (netcup VPS in Germany) throttles this host
+ * to ~12KB/s regardless of response size or query region. Even a 62KB response
+ * takes 7s; the full N.America response (3+ MB) would take ~280s. OpenSky serves
+ * 13,000+ aircraft globally in ~1s at full line speed.
+ *
+ * Rate limit: OpenSky free tier = 400 calls/day. We refresh at most once per
+ * 5 min (288 calls/day). GPS-jamming detection is disabled (OpenSky has no
+ * NACp field); re-enable by adding an adsb.lol Ukraine-region supplement later.
  */
 
-const REGIONS = [
-  { lat: 39.8, lon: -98.5, dist: 2000 },   // North America
-  { lat: 50.0, lon: 15.0, dist: 2000 },     // Europe
-  { lat: 35.0, lon: 105.0, dist: 2000 },    // Asia
-  { lat: -25.0, lon: 133.0, dist: 2000 },   // Australia
-  { lat: 0.0, lon: 20.0, dist: 2500 },      // Africa
-  { lat: -15.0, lon: -60.0, dist: 2000 },   // South America
-];
+const OPENSKY_GLOBAL_URL = 'https://opensky-network.org/api/states/all';
+// 5 min refresh = 288 calls/day, safely under OpenSky's 400/day free tier.
+// CACHE_TTL (60s) governs how stale the served response can be; actual upstream
+// data only changes when OPENSKY_TTL elapses.
+const OPENSKY_TTL = 300_000;
 
 // Helicopter type codes
 const HELI_TYPES = new Set([
@@ -54,8 +61,9 @@ const MILITARY_INDICATORS = new Set([
 
 const AIRLINE_CODE_RE = /^([A-Z]{3})\d/;
 
-// Raw aircraft record as returned by adsb.lol's `ac` array (only the fields we read).
-// `alt_baro` is feet and can be the string "ground" for aircraft on the surface.
+// Internal aircraft record — a shared shape for both adsb.lol and OpenSky data.
+// `alt_baro` is feet (or 0 when on-ground); `t`/`r`/`nac_p`/`dbFlags` are absent
+// for OpenSky-sourced records so classification falls back to callsign only.
 interface AdsbAircraft {
   hex?: string;
   flight?: string;
@@ -71,38 +79,44 @@ interface AdsbAircraft {
   nac_p?: number;
 }
 
-const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+// OpenSky state vector field indices
+const OS_HEX = 0, OS_FLIGHT = 1, OS_LON = 5, OS_LAT = 6;
+const OS_BARO_M = 7, OS_ON_GROUND = 8, OS_VEL_MS = 9, OS_TRACK = 10, OS_SQUAWK = 14;
 
-// adsb.lol rate-limits bursty/parallel requests hard: firing all 6 regions at
-// once returns 429 for all but one, so only a single region's aircraft ever
-// reach the map (the "planes in one place only" bug). We therefore fetch
-// regions sequentially (see refreshAll) and retry a throttled region with
-// backoff. Returns null on failure so the caller can keep that region's
-// last-good aircraft instead of blanking it; returns [] only on a genuine
-// empty success.
-async function fetchRegion(region: typeof REGIONS[0]): Promise<AdsbAircraft[] | null> {
-  const url = `https://api.adsb.lol/v2/lat/${region.lat}/lon/${region.lon}/dist/${region.dist}`;
-  for (let attempt = 0; attempt < 3; attempt++) {
-    try {
-      const res = await stealthFetch(url, { signal: AbortSignal.timeout(12000) });
-      if (res.status === 429) {
-        await sleep(1500);
-        continue;
-      }
-      if (res.ok) {
-        const data = (await res.json()) as { ac?: AdsbAircraft[] };
-        return data.ac ?? [];
-      }
-      return null; // non-429 HTTP error — don't clobber last-good data
-    } catch (e) {
-      if (attempt === 2) {
-        console.warn(`Region fetch failed for lat=${region.lat}:`, e);
-        return null;
-      }
-      await sleep(1000);
-    }
+// Fetch the global aircraft feed from OpenSky. Returns null on failure (caller
+// keeps last-good data). Altitude is metres → converted to feet; speed is m/s →
+// knots, so classifyFlight() works without changes.
+async function fetchGlobal(): Promise<AdsbAircraft[] | null> {
+  try {
+    const res = await stealthFetch(OPENSKY_GLOBAL_URL, { hardTimeoutMs: 15000 });
+    if (!res.ok) return null;
+    const data = await res.json() as { states?: (string | number | boolean | null)[][] };
+    return (data.states ?? []).reduce<AdsbAircraft[]>((acc, s) => {
+      const hex = s[OS_HEX] as string | null;
+      const lat = s[OS_LAT] as number | null;
+      const lon = s[OS_LON] as number | null;
+      if (!hex || lat == null || lon == null) return acc;
+      const baroM = s[OS_BARO_M] as number | null;
+      const onGround = s[OS_ON_GROUND] as boolean | null;
+      const velMs = s[OS_VEL_MS] as number | null;
+      acc.push({
+        hex,
+        flight: ((s[OS_FLIGHT] as string | null) ?? '').trim() || undefined,
+        lat,
+        lon,
+        // 0 ft triggers classifyFlight's isGrounded (< 100 ft) check
+        alt_baro: onGround ? 0 : (baroM != null ? Math.round(baroM / 0.3048) : undefined),
+        gs: velMs != null ? velMs / 0.5144 : undefined,
+        track: (s[OS_TRACK] as number | null) ?? undefined,
+        squawk: (s[OS_SQUAWK] as string | null) ?? undefined,
+        dbFlags: 0,
+      });
+      return acc;
+    }, []);
+  } catch (e) {
+    console.warn('OpenSky global fetch failed:', e);
+    return null;
   }
-  return null; // exhausted 429 retries — keep last-good
 }
 
 function classifyFlight(f: AdsbAircraft) {
@@ -129,7 +143,8 @@ function classifyFlight(f: AdsbAircraft) {
   const airlineMatch = AIRLINE_CODE_RE.exec(callsign);
   const airlineCode = airlineMatch ? airlineMatch[1] : '';
 
-  // Classification
+  // Classification (type-based checks degrade gracefully to 'commercial' when
+  // aircraft type is unavailable, as is the case for OpenSky-sourced records)
   let category: 'commercial' | 'private' | 'jet' | 'military' = 'commercial';
   if (dbFlags & 1 || MILITARY_INDICATORS.has(modelUpper) || (f.flight || '').match(/^(RCH|KING|DUKE|EVAC|JAKE|REACH|CONVOY)\d/i)) {
     category = 'military';
@@ -162,12 +177,6 @@ function classifyFlight(f: AdsbAircraft) {
   };
 }
 
-// In-memory cache to prevent global fan-out abuse
-// NOTE (Issue #110): This cache is per-isolate in serverless environments (Vercel).
-// Multiple isolates may each hold their own cache, but this is acceptable because:
-// 1. It coalesces concurrent requests within the same isolate
-// 2. It prevents hammering adsb.lol which would cause rate-limit bans
-// For a globally shared cache, migrate to Vercel KV or similar persistent store.
 type ClassifiedFlight = NonNullable<ReturnType<typeof classifyFlight>>;
 type JammingPoint = { lat: number; lng: number; nac_p: number; callsign: string };
 
@@ -183,64 +192,49 @@ interface FlightResponse {
 
 const JAMMING_NACAP_THRESHOLD = 4;
 
-// Per-region last-good aircraft, keyed by REGIONS index. Persisting per region
-// (rather than one combined snapshot) means a transient 429/timeout on a single
-// region keeps that region's previous aircraft on the map instead of blanking
-// them — the combined view degrades gracefully instead of collapsing to whatever
-// one region happened to win the race.
-const regionCache = new Map<number, AdsbAircraft[]>();
+// Load aircraft type cache from disk at startup (non-blocking)
+loadDb().catch(() => {});
+
+// Last-good aircraft list — preserved across refreshes so a transient OpenSky
+// outage doesn't blank the map.
+let lastGoodAircraft: AdsbAircraft[] = [];
+let openskyLastFetch = 0;
 
 let cachedData: FlightResponse | null = null;
 let lastFetchTime = 0;
-const CACHE_TTL = 60000; // rebuild the combined snapshot at most once per minute
-const REGION_SPACING_MS = 1200; // pause between sequential region fetches
+const CACHE_TTL = 60_000;
 let refreshing: Promise<void> | null = null;
-// Rotating start index for the sequential sweep. adsb.lol may throttle us partway
-// through a sweep, starving whichever regions come last; rotating the start each
-// sweep gives every region a turn at the front, and the per-region last-good
-// cache retains the others — so all six populate over successive sweeps.
-let sweepOffset = 0;
 
-// Build the classified response from every region's last-good aircraft, deduped
-// by ICAO hex across overlapping region radii.
-function buildResponse(): FlightResponse {
-  const allRaw: AdsbAircraft[] = [];
-  const seenHex = new Set<string>();
-  for (const regionAc of regionCache.values()) {
-    for (const ac of regionAc) {
-      const hex = (ac.hex || '').toLowerCase().trim();
-      if (hex && !seenHex.has(hex)) {
-        seenHex.add(hex);
-        allRaw.push(ac);
-      }
-    }
-  }
-
+function buildResponse(aircraft: AdsbAircraft[]): FlightResponse {
   const commercial: ClassifiedFlight[] = [];
   const privateFl: ClassifiedFlight[] = [];
   const jets: ClassifiedFlight[] = [];
   const military: ClassifiedFlight[] = [];
   const gpsJamming: JammingPoint[] = [];
 
-  for (const raw of allRaw) {
+  // Enrich with type and military flag from the Mictronics DB (in-place so
+  // records carry the data forward until the next OpenSky refresh replaces them)
+  for (const a of aircraft) {
+    if (!a.hex) continue;
+    const entry = lookupAircraft(a.hex);
+    if (!a.t && entry.type) a.t = entry.type;
+    if (!a.r && entry.reg)  a.r = entry.reg;
+    if (entry.military)     a.dbFlags = (a.dbFlags ?? 0) | 1;
+  }
+
+  for (const raw of aircraft) {
     const flight = classifyFlight(raw);
     if (!flight) continue;
 
-    // GPS jamming detection
     if (typeof flight.nac_p === 'number' && flight.nac_p <= JAMMING_NACAP_THRESHOLD && !flight.grounded) {
-      gpsJamming.push({
-        lat: flight.lat,
-        lng: flight.lng,
-        nac_p: flight.nac_p,
-        callsign: flight.callsign,
-      });
+      gpsJamming.push({ lat: flight.lat, lng: flight.lng, nac_p: flight.nac_p, callsign: flight.callsign });
     }
 
     switch (flight.category) {
       case 'military': military.push(flight); break;
-      case 'jet': jets.push(flight); break;
-      case 'private': privateFl.push(flight); break;
-      default: commercial.push(flight);
+      case 'jet':      jets.push(flight);     break;
+      case 'private':  privateFl.push(flight); break;
+      default:         commercial.push(flight);
     }
   }
 
@@ -250,23 +244,23 @@ function buildResponse(): FlightResponse {
     private_jets: jets,
     military_flights: military,
     gps_jamming: aggregateJamming(gpsJamming, JAMMING_NACAP_THRESHOLD),
-    total: allRaw.length,
+    total: aircraft.length,
     timestamp: new Date().toISOString(),
   };
 }
 
-// Sweep all regions sequentially (adsb.lol 429s parallel bursts), updating each
-// region's last-good cache only on success, then rebuild the combined snapshot.
 async function refreshAll(): Promise<void> {
-  const start = sweepOffset;
-  sweepOffset = (sweepOffset + 1) % REGIONS.length;
-  for (let n = 0; n < REGIONS.length; n++) {
-    const i = (start + n) % REGIONS.length;
-    const ac = await fetchRegion(REGIONS[i]);
-    if (ac !== null) regionCache.set(i, ac); // null = keep last-good
-    if (n < REGIONS.length - 1) await sleep(REGION_SPACING_MS);
+  await loadDb(); // ensure disk cache is loaded (no-op after first call)
+  const now = Date.now();
+  if (now - openskyLastFetch > OPENSKY_TTL) {
+    const fresh = await fetchGlobal();
+    if (fresh !== null) {
+      lastGoodAircraft = fresh;
+      openskyLastFetch = now;
+    }
+    // fresh === null: keep lastGoodAircraft (last-good fallback)
   }
-  cachedData = buildResponse();
+  cachedData = buildResponse(lastGoodAircraft);
   lastFetchTime = Date.now();
 }
 
@@ -274,15 +268,12 @@ export async function GET() {
   const now = Date.now();
   const stale = !cachedData || now - lastFetchTime > CACHE_TTL;
 
-  // Kick a background refresh when stale; the guard ensures only one sweep runs
-  // at a time regardless of how many requests arrive during it.
   if (stale && !refreshing) {
     refreshing = refreshAll().finally(() => { refreshing = null; });
   }
 
-  // Cold start: nothing cached yet — wait for the first sweep to populate so the
-  // initial load returns aircraft rather than an empty layer for a full poll
-  // cycle. Subsequent requests are served instantly from cache while refreshing.
+  // Cold start: block until the first fetch completes so the client gets real
+  // data on initial load rather than an empty layer for a full poll cycle.
   if (!cachedData && refreshing) {
     try { await refreshing; } catch { /* fall through to empty response */ }
   }
@@ -297,8 +288,6 @@ export async function GET() {
     timestamp: new Date().toISOString(),
   };
 
-  // Don't let a sparse/empty result (transient upstream failure) get cached
-  // downstream, so the next poll retries instead of serving it for the full TTL.
   const cacheControl = body.total < 100
     ? 'no-store, max-age=0'
     : 'public, s-maxage=30, stale-while-revalidate=60';
@@ -309,13 +298,12 @@ export async function GET() {
 function aggregateJamming(points: JammingPoint[], threshold: number) {
   if (points.length === 0) return [];
   const grid = new Map<string, { lat: number; lng: number; count: number; total_nac_p: number }>();
-  const GRID_SIZE = 2; // degrees
+  const GRID_SIZE = 2;
 
   for (const p of points) {
     const gLat = Math.floor(p.lat / GRID_SIZE) * GRID_SIZE;
     const gLng = Math.floor(p.lng / GRID_SIZE) * GRID_SIZE;
     const key = `${gLat},${gLng}`;
-
     if (!grid.has(key)) {
       grid.set(key, { lat: gLat + GRID_SIZE / 2, lng: gLng + GRID_SIZE / 2, count: 0, total_nac_p: 0 });
     }
@@ -325,7 +313,7 @@ function aggregateJamming(points: JammingPoint[], threshold: number) {
   }
 
   return Array.from(grid.values())
-    .filter(z => z.count >= 3) // Minimum 3 aircraft with degraded NACp
+    .filter(z => z.count >= 3)
     .map(z => ({
       lat: z.lat,
       lng: z.lng,
@@ -333,4 +321,3 @@ function aggregateJamming(points: JammingPoint[], threshold: number) {
       count: z.count,
     }));
 }
-

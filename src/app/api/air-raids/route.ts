@@ -22,6 +22,7 @@ interface AirRaidSnap {
 }
 
 let lastSnapAt = 0; // epoch ms — module-level, survives across requests
+let lastGoodAlerts: EnrichedAlert[] | null = null; // served with stale:true on upstream failure
 
 async function readHistory(): Promise<AirRaidSnap[]> {
   try {
@@ -131,6 +132,9 @@ export async function GET(req: Request) {
 
     if (!res.ok) {
       console.error(`[OSIRIS] vadimklimenko responded with ${res.status}`);
+      if (lastGoodAlerts) {
+        return NextResponse.json({ alerts: lastGoodAlerts, total: lastGoodAlerts.length, stale: true, error: `air-alert source returned ${res.status}` });
+      }
       return NextResponse.json({ alerts: [], total: 0, error: `air-alert source returned ${res.status}` }, { status: 502 });
     }
 
@@ -193,6 +197,7 @@ export async function GET(req: Request) {
       }
     }
 
+    lastGoodAlerts = alerts;
     const oblastCount = alerts.filter((a) => a.level === 'oblast').length;
     const districtCount = alerts.filter((a) => a.level === 'district').length;
 
@@ -212,10 +217,9 @@ export async function GET(req: Request) {
     );
   } catch (error) {
     console.error('[OSIRIS] Air raid fetch error:', error);
-    return NextResponse.json({
-      alerts: [],
-      total: 0,
-      error: error instanceof Error ? error.message : 'Failed to fetch air raid data',
-    });
+    if (lastGoodAlerts) {
+      return NextResponse.json({ alerts: lastGoodAlerts, total: lastGoodAlerts.length, stale: true, error: error instanceof Error ? error.message : 'Failed to fetch air raid data' });
+    }
+    return NextResponse.json({ alerts: [], total: 0, error: error instanceof Error ? error.message : 'Failed to fetch air raid data' });
   }
 }

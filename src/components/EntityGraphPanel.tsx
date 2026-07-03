@@ -44,9 +44,66 @@ const TYPE_ICONS: Record<string, typeof Plane> = {
 };
 
 // ── EXPANDABLE TYPES ──
-// 'event' and 'sanction' nodes appear in the graph but have no intel resolver —
-// attempting to expand them causes a 400 "Invalid type" from /api/entity/expand.
 const EXPANDABLE_TYPES = new Set(['aircraft', 'vessel', 'company', 'person', 'ip', 'country']);
+
+// Map OpenSanctions / Wikidata schema labels → resolvable entity type.
+function sanctionResolveType(schema: string | undefined): string | null {
+  if (!schema) return null;
+  const s = schema.toLowerCase();
+  if (['organization', 'company', 'legalentity', 'publicbody'].some(t => s.includes(t))) return 'company';
+  if (s === 'person') return 'person';
+  if (s === 'vessel') return 'vessel';
+  if (s === 'aircraft') return 'aircraft';
+  return null;
+}
+
+// ISO 3166-1 alpha-2 → full country name for display in property cards
+const ISO_CC: Record<string, string> = {
+  af:'Afghanistan',al:'Albania',dz:'Algeria',ao:'Angola',ar:'Argentina',am:'Armenia',
+  au:'Australia',at:'Austria',az:'Azerbaijan',bs:'Bahamas',bh:'Bahrain',bd:'Bangladesh',
+  by:'Belarus',be:'Belgium',bz:'Belize',bj:'Benin',bo:'Bolivia',ba:'Bosnia and Herzegovina',
+  bw:'Botswana',br:'Brazil',bn:'Brunei',bg:'Bulgaria',kh:'Cambodia',cm:'Cameroon',
+  ca:'Canada',cf:'Central African Republic',td:'Chad',cl:'Chile',cn:'China',co:'Colombia',
+  cd:'DR Congo',cg:'Congo',cr:'Costa Rica',hr:'Croatia',cu:'Cuba',cw:'Curaçao',
+  cy:'Cyprus',cz:'Czech Republic',dk:'Denmark',dj:'Djibouti',do:'Dominican Republic',
+  ec:'Ecuador',eg:'Egypt',ee:'Estonia',et:'Ethiopia',fj:'Fiji',fi:'Finland',fr:'France',
+  ga:'Gabon',ge:'Georgia',de:'Germany',gh:'Ghana',gr:'Greece',gt:'Guatemala',
+  gn:'Guinea',gy:'Guyana',ht:'Haiti',hn:'Honduras',hk:'Hong Kong',hu:'Hungary',
+  is:'Iceland',in:'India',id:'Indonesia',ir:'Iran',iq:'Iraq',ie:'Ireland',
+  il:'Israel',it:'Italy',jp:'Japan',jo:'Jordan',kz:'Kazakhstan',ke:'Kenya',
+  kp:'North Korea',kr:'South Korea',kw:'Kuwait',kg:'Kyrgyzstan',la:'Laos',
+  lv:'Latvia',lb:'Lebanon',ly:'Libya',lt:'Lithuania',lu:'Luxembourg',
+  mg:'Madagascar',mw:'Malawi',my:'Malaysia',mv:'Maldives',ml:'Mali',mt:'Malta',
+  mr:'Mauritania',mu:'Mauritius',mx:'Mexico',md:'Moldova',mn:'Mongolia',
+  me:'Montenegro',ma:'Morocco',mz:'Mozambique',mm:'Myanmar',na:'Namibia',
+  np:'Nepal',nl:'Netherlands',nz:'New Zealand',ni:'Nicaragua',ne:'Niger',
+  ng:'Nigeria',no:'Norway',om:'Oman',pk:'Pakistan',pa:'Panama',
+  py:'Paraguay',pe:'Peru',ph:'Philippines',pl:'Poland',pt:'Portugal',
+  qa:'Qatar',ro:'Romania',ru:'Russia',rw:'Rwanda',sa:'Saudi Arabia',
+  sn:'Senegal',rs:'Serbia',sl:'Sierra Leone',sg:'Singapore',sk:'Slovakia',
+  si:'Slovenia',so:'Somalia',za:'South Africa',ss:'South Sudan',es:'Spain',
+  lk:'Sri Lanka',sd:'Sudan',sr:'Suriname',se:'Sweden',ch:'Switzerland',
+  sy:'Syria',tw:'Taiwan',tj:'Tajikistan',tz:'Tanzania',th:'Thailand',
+  tg:'Togo',tt:'Trinidad and Tobago',tn:'Tunisia',tr:'Turkey',tm:'Turkmenistan',
+  ug:'Uganda',ua:'Ukraine',ae:'UAE',gb:'United Kingdom',us:'United States',
+  uy:'Uruguay',uz:'Uzbekistan',ve:'Venezuela',vn:'Vietnam',ye:'Yemen',
+  zm:'Zambia',zw:'Zimbabwe',lr:'Liberia',mh:'Marshall Islands',sc:'Seychelles',
+  kn:'Saint Kitts and Nevis',vg:'British Virgin Islands',ky:'Cayman Islands',
+  bm:'Bermuda',gi:'Gibraltar',im:'Isle of Man',je:'Jersey',gg:'Guernsey',
+  fo:'Faroe Islands',gl:'Greenland',ws:'Samoa',to:'Tonga',vu:'Vanuatu',
+  sb:'Solomon Islands',fm:'Micronesia',pw:'Palau',cv:'Cape Verde',
+};
+
+function formatPropValue(key: string, value: unknown): string {
+  if (typeof value === 'boolean') return value ? 'YES' : 'NO';
+  const s = String(value || '—');
+  if (s === '—') return s;
+  // Resolve ISO codes for flag / country fields
+  if (['flag', 'country', 'nationality', 'os_nationality'].includes(key)) {
+    return ISO_CC[s.toLowerCase()] ?? s;
+  }
+  return s;
+}
 
 // ── PROPS ──
 
@@ -67,21 +124,41 @@ function EntityGraphPanel({ entity, onClose }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
 
   const mergeGraph = useCallback((existing: GraphData, incoming: GraphData): GraphData => {
-    const nodeMap = new Map<string, EntityNode>();
-    for (const n of existing.nodes) nodeMap.set(n.id, n);
-    for (const n of incoming.nodes) if (!nodeMap.has(n.id)) nodeMap.set(n.id, n);
-    const linkSet = new Set(existing.links.map(l => {
-      const s = typeof l.source === 'string' ? l.source : l.source.id;
-      const t = typeof l.target === 'string' ? l.target : l.target.id;
-      return `${s}→${t}→${l.label}`;
-    }));
+    // Case-insensitive dedup: "vessel:RIGEL" and "vessel:Rigel" are the same node.
+    const normId = (id: string): string => {
+      const c = id.indexOf(':');
+      if (c < 0) return id.trim().toLowerCase();
+      return `${id.slice(0, c)}:${id.slice(c + 1).trim().toLowerCase()}`;
+    };
+
+    const normToCanon = new Map<string, string>(); // normKey → canonical id (first seen)
+    const nodeMap = new Map<string, EntityNode>();  // normKey → node (existing keeps physics state)
+
+    for (const n of existing.nodes) {
+      const key = normId(n.id);
+      if (!nodeMap.has(key)) { normToCanon.set(key, n.id); nodeMap.set(key, n); }
+    }
+    for (const n of incoming.nodes) {
+      const key = normId(n.id);
+      if (!nodeMap.has(key)) { normToCanon.set(key, n.id); nodeMap.set(key, n); }
+    }
+
+    const rawId = (endpoint: string | EntityNode): string =>
+      typeof endpoint === 'string' ? endpoint : endpoint.id;
+    const resolveId = (id: string): string => normToCanon.get(normId(id)) ?? id;
+
+    const linkSet = new Set(existing.links.map(l =>
+      `${resolveId(rawId(l.source))}→${resolveId(rawId(l.target))}→${l.label}`
+    ));
+
     const merged = [...existing.links];
     for (const l of incoming.links) {
-      const s = typeof l.source === 'string' ? l.source : l.source.id;
-      const t = typeof l.target === 'string' ? l.target : l.target.id;
+      const s = resolveId(rawId(l.source));
+      const t = resolveId(rawId(l.target));
       const k = `${s}→${t}→${l.label}`;
-      if (!linkSet.has(k)) { linkSet.add(k); merged.push(l); }
+      if (!linkSet.has(k)) { linkSet.add(k); merged.push({ ...l, source: s, target: t }); }
     }
+
     return { nodes: Array.from(nodeMap.values()), links: merged };
   }, []);
 
@@ -91,10 +168,12 @@ function EntityGraphPanel({ entity, onClose }: Props) {
     setLoading(true); setError(null);
     try {
       const params = new URLSearchParams({ type, id });
-      // Forward extra properties for aircraft/vessel resolution
-      if (properties?.registration) params.set('registration', properties.registration);
-      if (properties?.model) params.set('model', properties.model);
-      if (properties?.icao24) params.set('icao24', properties.icao24);
+      // Forward all available entity properties to the intel layer
+      const FORWARDED = ['registration','model','icao24','imo','mmsi','vesselName','flag','ship_type','destination','call_sign','threat_type','status'];
+      for (const key of FORWARDED) {
+        const val = properties?.[key];
+        if (val != null && val !== '') params.set(key, String(val));
+      }
       const res = await fetch(`/api/entity/expand?${params}`, { cache: 'no-store' });
       if (!res.ok) { const b = await res.json().catch(() => ({})); throw new Error(b.error || `HTTP ${res.status}`); }
       const data = await res.json();
@@ -184,9 +263,10 @@ function EntityGraphPanel({ entity, onClose }: Props) {
       ctx.strokeStyle = `${color}30`; ctx.lineWidth = 1; ctx.stroke();
     }
 
-    // Clean label rendering
+    // Clean label rendering. fontSize in canvas units; canvas transform makes
+    // 3px canvas units look large on screen at high zoom — always render.
     const fontSize = Math.max(10 / globalScale, 3);
-    if (fontSize > 3.5 || isSelected) {
+    if (fontSize > 0 || isSelected) {
       ctx.font = `${isSelected ? 'bold ' : ''}${fontSize}px 'JetBrains Mono', monospace`;
       ctx.fillStyle = isSelected ? '#fff' : `${color}cc`;
       ctx.textAlign = 'center'; ctx.textBaseline = 'top';
@@ -204,15 +284,14 @@ function EntityGraphPanel({ entity, onClose }: Props) {
     const { source: s, target: t } = link;
     if (!s.x || !t.x) return;
     ctx.beginPath(); ctx.moveTo(s.x, s.y); ctx.lineTo(t.x, t.y);
-    // Smooth, thin, non-dashed lines
-    ctx.strokeStyle = 'rgba(212,175,55,0.15)'; // faint gold
-    ctx.lineWidth = Math.max(0.5, 1 / globalScale); 
+    ctx.strokeStyle = 'rgba(212,175,55,0.55)';
+    ctx.lineWidth = Math.max(0.8, 1.5 / globalScale);
     ctx.stroke();
-    
+
     const fs = Math.max(8 / globalScale, 2);
     if (fs > 3) {
-      ctx.font = `${fs}px 'JetBrains Mono', monospace`; 
-      ctx.fillStyle = 'rgba(212,175,55,0.4)';
+      ctx.font = `${fs}px 'JetBrains Mono', monospace`;
+      ctx.fillStyle = 'rgba(212,175,55,0.7)';
       ctx.textAlign = 'center'; ctx.fillText(link.label || '', (s.x + t.x) / 2, (s.y + t.y) / 2);
     }
   }, []);
@@ -349,14 +428,16 @@ function EntityGraphPanel({ entity, onClose }: Props) {
                       <div className="text-[11px] font-mono text-white/90 truncate flex items-center gap-1 mt-0.5">
                         <span className="w-1 h-1 bg-[var(--gold-primary)]/40 inline-block" />
                         <span className="typewriter" style={{ animationDelay: `${i * 0.1}s` }}>
-                          {typeof v === 'boolean' ? (v ? 'YES' : 'NO') : String(v || '—')}
+                          {formatPropValue(k, v)}
                         </span>
                       </div>
                     </div>
                   ))}
                 </div>
               )}
-              {!expandedIds.has(`${selectedNode.type}:${selectedNode.id.includes(':') ? selectedNode.id.split(':').slice(1).join(':') : selectedNode.id}`) && (
+              {/* Expand button for normal entity types */}
+              {EXPANDABLE_TYPES.has(selectedNode.type) &&
+                !expandedIds.has(`${selectedNode.type}:${selectedNode.id.includes(':') ? selectedNode.id.split(':').slice(1).join(':') : selectedNode.id}`) && (
                 <button onClick={() => {
                   const rawId = selectedNode.id.includes(':') ? selectedNode.id.split(':').slice(1).join(':') : selectedNode.id;
                   expandEntity(selectedNode.type, rawId);
@@ -365,6 +446,21 @@ function EntityGraphPanel({ entity, onClose }: Props) {
                   <span className="text-[11px] font-mono font-bold text-[var(--gold-primary)] tracking-[0.2em]">[ ACQUIRE TARGET DATA ]</span>
                 </button>
               )}
+              {/* Sanction nodes: resolve as their underlying entity type based on schema */}
+              {selectedNode.type === 'sanction' && (() => {
+                const resolveAs = sanctionResolveType(selectedNode.properties?.schema);
+                if (!resolveAs) return null;
+                const name = selectedNode.label.replace(/^⚠\s*/, '');
+                const alreadyExpanded = expandedIds.has(`${resolveAs}:${name}`);
+                if (alreadyExpanded) return null;
+                return (
+                  <button onClick={() => expandEntity(resolveAs, name)}
+                    className="btn-tactical w-full mt-4 flex items-center justify-center gap-2" disabled={loading}>
+                    {loading ? <Loader2 className="w-3.5 h-3.5 text-[var(--gold-primary)] animate-spin" /> : <Network className="w-3.5 h-3.5 text-[var(--gold-primary)]" />}
+                    <span className="text-[11px] font-mono font-bold text-[var(--gold-primary)] tracking-[0.2em]">[ RESOLVE AS {resolveAs.toUpperCase()} ]</span>
+                  </button>
+                );
+              })()}
             </motion.div>
           )}
         </AnimatePresence>

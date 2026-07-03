@@ -145,11 +145,25 @@ const TTL_MS = 12 * 60 * 60 * 1000;  // refresh OFAC at most every 12h
 const GUR_TTL_MS = 24 * 60 * 60 * 1000; // refresh GUR at most every 24h
 const ERROR_BACKOFF_MS = 5 * 60 * 1000; // after a failure, retry in 5 min
 
-let imos = new Set<number>(SEED_IMOS);
-let mmsis = new Set<number>();
-let lastRefresh = 0;
-let lastGurRefresh = 0;
-let refreshing: Promise<void> | null = null;
+// Module-level vars attached to globalThis so they survive Next.js module
+// re-evaluation (e.g. under memory pressure) without resetting the watchlist
+// or triggering an unnecessary re-fetch on the next request.
+const globalForFleet = globalThis as unknown as {
+  sfImos: Set<number>;
+  sfMmsis: Set<number>;
+  sfLastRefresh: number;
+  sfLastGurRefresh: number;
+  sfRefreshing: Promise<void> | null;
+};
+
+if (!globalForFleet.sfImos) {
+  globalForFleet.sfImos = new Set<number>(SEED_IMOS);
+  globalForFleet.sfMmsis = new Set<number>();
+  globalForFleet.sfLastRefresh = 0;
+  globalForFleet.sfLastGurRefresh = 0;
+  globalForFleet.sfRefreshing = null;
+}
+
 
 // IMO numbers are exactly 7 digits.
 function isValidImo(n: unknown): n is number {
@@ -238,22 +252,22 @@ async function refreshGur(): Promise<void> {
     if (gurImos.length < 100) {
       // Too few to be a real parse — Cloudflare challenge page or layout change
       console.warn(`[OSIRIS] shadow-fleet GUR parse yielded only ${gurImos.length} IMOs — skipping`);
-      lastGurRefresh = Date.now() - GUR_TTL_MS + ERROR_BACKOFF_MS;
+      globalForFleet.sfLastGurRefresh = Date.now() - GUR_TTL_MS + ERROR_BACKOFF_MS;
       return;
     }
-    imos = new Set<number>([...SEED_IMOS, ...imos, ...gurImos]);
-    lastGurRefresh = Date.now();
-    console.log(`[OSIRIS] shadow-fleet GUR refreshed: ${gurImos.length} vessels, total IMO set: ${imos.size}`);
+    globalForFleet.sfImos = new Set<number>([...SEED_IMOS, ...globalForFleet.sfImos, ...gurImos]);
+    globalForFleet.sfLastGurRefresh = Date.now();
+    console.log(`[OSIRIS] shadow-fleet GUR refreshed: ${gurImos.length} vessels, total IMO set: ${globalForFleet.sfImos.size}`);
   } catch (err) {
     console.warn('[OSIRIS] shadow-fleet GUR refresh failed:', err instanceof Error ? err.message : err);
-    lastGurRefresh = Date.now() - GUR_TTL_MS + ERROR_BACKOFF_MS;
+    globalForFleet.sfLastGurRefresh = Date.now() - GUR_TTL_MS + ERROR_BACKOFF_MS;
   }
 }
 
 async function refresh(): Promise<void> {
   try {
     // Run GUR refresh concurrently if stale
-    const gurPromise = Date.now() - lastGurRefresh > GUR_TTL_MS ? refreshGur() : Promise.resolve();
+    const gurPromise = Date.now() - globalForFleet.sfLastGurRefresh > GUR_TTL_MS ? refreshGur() : Promise.resolve();
 
     const res = await stealthFetch(SOURCE_URL, { signal: AbortSignal.timeout(20000) });
     if (!res.ok) throw new Error(`watchlist source returned ${res.status}`);
@@ -266,27 +280,27 @@ async function refresh(): Promise<void> {
 
     if (parsedImos.length === 0 && parsedMmsis.length === 0) {
       console.warn('[OSIRIS] shadow-fleet source yielded 0 identifiers; keeping current set');
-      lastRefresh = Date.now() - TTL_MS + ERROR_BACKOFF_MS;
+      globalForFleet.sfLastRefresh = Date.now() - TTL_MS + ERROR_BACKOFF_MS;
       return;
     }
 
-    // Merge: seed + GUR (already in imos) + OFAC. Never shrink the set.
-    imos = new Set<number>([...imos, ...parsedImos]);
+    // Merge: seed + GUR (already in sfImos) + OFAC. Never shrink the set.
+    globalForFleet.sfImos = new Set<number>([...globalForFleet.sfImos, ...parsedImos]);
     if (parsedMmsis.length > 0) {
-      mmsis = new Set<number>(parsedMmsis);
+      globalForFleet.sfMmsis = new Set<number>(parsedMmsis);
     }
-    lastRefresh = Date.now();
+    globalForFleet.sfLastRefresh = Date.now();
     console.log(
-      `[OSIRIS] shadow-fleet watchlist refreshed: ${imos.size} IMOs, ${mmsis.size} MMSIs (OFAC: ${parsedImos.length}/${parsedMmsis.length})`
+      `[OSIRIS] shadow-fleet watchlist refreshed: ${globalForFleet.sfImos.size} IMOs, ${globalForFleet.sfMmsis.size} MMSIs (OFAC: ${parsedImos.length}/${parsedMmsis.length})`
     );
   } catch (err) {
     console.warn(
       '[OSIRIS] shadow-fleet refresh failed; using cached/seed set:',
       err instanceof Error ? err.message : err
     );
-    lastRefresh = Date.now() - TTL_MS + ERROR_BACKOFF_MS;
+    globalForFleet.sfLastRefresh = Date.now() - TTL_MS + ERROR_BACKOFF_MS;
   } finally {
-    refreshing = null;
+    globalForFleet.sfRefreshing = null;
   }
 }
 
@@ -294,19 +308,19 @@ async function refresh(): Promise<void> {
 // hot AIS message handler) never block. The first call returns the SEED set
 // immediately while the first fetch runs.
 function maybeRefresh(): void {
-  if (!refreshing && Date.now() - lastRefresh > TTL_MS) {
-    refreshing = refresh();
+  if (!globalForFleet.sfRefreshing && Date.now() - globalForFleet.sfLastRefresh > TTL_MS) {
+    globalForFleet.sfRefreshing = refresh();
   }
 }
 
 /** Current sanctioned-IMO watchlist (synchronous; refreshes in the background). */
 export function getShadowFleetImos(): Set<number> {
   maybeRefresh();
-  return imos;
+  return globalForFleet.sfImos;
 }
 
 /** Current sanctioned-MMSI watchlist (synchronous; refreshes in the background). */
 export function getShadowFleetMmsis(): Set<number> {
   maybeRefresh();
-  return mmsis;
+  return globalForFleet.sfMmsis;
 }

@@ -111,7 +111,7 @@ export default function SearchBar({ onLocate, entities = [], onEnsureLoaded, onS
 
   return (
     <div className="relative w-full">
-      <div className="flex items-center gap-2 glass-panel px-3 py-2.5 !border-[var(--border-active)]">
+      <div className="flex items-center gap-2 w-full glass-panel px-3 py-2.5 !border-[var(--border-active)]">
         <Search className="w-3.5 h-3.5 text-[var(--gold-primary)] flex-shrink-0" />
         <input
           ref={inputRef}
@@ -122,7 +122,8 @@ export default function SearchBar({ onLocate, entities = [], onEnsureLoaded, onS
             if (e.key === 'Enter' && results.length > 0) handleSelect(results[0]);
           }}
           placeholder="COORDS, PLACE, OR ENTITY NAME (ship, flight, cam…)"
-          className="flex-1 bg-transparent text-[10px] text-[var(--text-primary)] font-mono tracking-wider outline-none placeholder:text-[var(--text-muted)]"
+          inputMode="search"
+          className="flex-1 min-w-0 bg-transparent text-[10px] text-[var(--text-primary)] font-mono tracking-wider outline-none placeholder:text-[var(--text-muted)]"
         />
         {loading && <div className="w-3 h-3 border border-[var(--gold-primary)] border-t-transparent rounded-full animate-spin" />}
         <button onClick={() => { setOpen(false); setValue(''); setResults([]); }} className="text-[var(--text-muted)] hover:text-[var(--text-primary)]">

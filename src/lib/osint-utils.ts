@@ -183,3 +183,17 @@ export async function batchFetch<T>(
   await Promise.all(workers);
   return results;
 }
+
+/**
+ * Parses a FIRMS "latest" field ('YYYY-MM-DD HHMM') into a UTC Unix ms timestamp.
+ * Returns null if the string is missing, malformed, or produces NaN.
+ * Used by the timeline histogram (page.tsx) and the OsirisMap thermal filter — keep in sync.
+ */
+export function parseThermalLatest(latest: string | undefined | null): number | null {
+  if (!latest) return null;
+  const parts = latest.trim().split(' ');
+  if (parts.length < 2) return null;
+  const t4 = parts[1].padStart(4, '0');
+  const ms = new Date(`${parts[0]}T${t4.slice(0, 2)}:${t4.slice(2, 4)}:00Z`).getTime();
+  return Number.isNaN(ms) ? null : ms;
+}

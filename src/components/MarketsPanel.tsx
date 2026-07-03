@@ -86,15 +86,16 @@ export default function MarketsPanel({ data, spaceWeather }: MarketsPanelProps) 
               </div>
             )}
 
-            {/* Section Tabs — icons instead of emojis */}
-            <div className="flex gap-0.5 mb-2 overflow-x-auto">
+            {/* Section Tabs — icon + abbreviated label so all 5 fit on any width */}
+            <div className="flex gap-0.5 mb-2">
               {SECTIONS.map(s => {
                 const Icon = s.icon;
                 return (
                   <button key={s.key} onClick={() => setActiveSection(s.key)}
-                    className={`flex items-center gap-1 px-2.5 py-1.5 rounded text-[9px] font-mono tracking-wider whitespace-nowrap transition-all ${activeSection === s.key ? 'bg-[var(--hover-accent)] text-[var(--gold-primary)] border border-[var(--border-primary)]' : 'text-[var(--text-muted)] hover:text-[var(--text-secondary)] border border-transparent'}`}>
+                    title={s.label}
+                    className={`flex-1 flex flex-col items-center gap-0.5 py-1.5 rounded text-[8px] font-mono tracking-wider transition-all ${activeSection === s.key ? 'bg-[var(--hover-accent)] text-[var(--gold-primary)] border border-[var(--border-primary)]' : 'text-[var(--text-muted)] hover:text-[var(--text-secondary)] border border-transparent'}`}>
                     <Icon className="w-3 h-3" />
-                    {s.label}
+                    <span className="hidden sm:inline">{s.label.slice(0, 5)}</span>
                   </button>
                 );
               })}

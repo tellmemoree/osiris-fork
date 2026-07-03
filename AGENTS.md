@@ -25,3 +25,5 @@ section of `ARCHITECTURE.md` in the *same* commit. A stale map is worse than non
 - **`pkill` is its own command.** Always send `pkill`/`kill` as a standalone Bash call.
   Chaining anything after it aborts the rest of the script (exit 144), so the follow-up
   silently doesn't run and must be resent. One call kills; a separate call relaunches.
+- **One feature per branch.** Never bundle multiple features or fixes into one `feat/*` branch. Each gets its own branch.
+- **feat/* branches merge into the weekly branch on Friday only.** Complete your feat/* branch and leave it. Do NOT merge it into `week/YYYY-WNN` mid-week. The weekly branch is a Friday integration point. The only exception is an explicitly user-tagged hotfix.

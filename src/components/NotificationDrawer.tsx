@@ -1,12 +1,12 @@
 'use client';
 
-import { useRef } from 'react';
-import { X, Bell, MapPin, Trash2 } from 'lucide-react';
+import { useRef, useState } from 'react';
+import { X, Bell, MapPin, Trash2, ChevronDown } from 'lucide-react';
 import { AnimatePresence, motion } from 'framer-motion';
 import type { ThresholdAlert } from '@/app/api/threshold-alerts/route';
 
 export interface NotificationRecord extends ThresholdAlert {
-  seenAt: number; // Date.now() when it entered the log (used for unread tracking only)
+  seenAt: number;
 }
 
 const SEV_COLOR: Record<string, string> = {
@@ -16,7 +16,6 @@ const SEV_COLOR: Record<string, string> = {
   LOW: '#00E676',
 };
 
-// Format the server-generated ISO timestamp as HH:MM (today) or "Mon DD HH:MM" (older).
 function formatAlertTime(iso: string): string {
   const d = new Date(iso);
   if (isNaN(d.getTime())) return '—';
@@ -28,16 +27,49 @@ function formatAlertTime(iso: string): string {
   return `${mon} ${d.getDate()}, ${hh}:${mm}`;
 }
 
+// Derive the group key from the alert's type field (from ThresholdAlert.rule prefix),
+// falling back to the severity so heterogeneous alerts still collapse into buckets.
+function notifGroupKey(n: NotificationRecord): string {
+  return n.rule ?? n.severity;
+}
+
 interface Props {
   isOpen: boolean;
   onClose: () => void;
   notifications: NotificationRecord[];
   onClear: () => void;
   onLocate?: (lat: number, lng: number) => void;
+  onDismiss?: (id: string) => void;
+  onDismissGroup?: (ids: string[]) => void;
 }
 
-export default function NotificationDrawer({ isOpen, onClose, notifications, onClear, onLocate }: Props) {
+export default function NotificationDrawer({
+  isOpen,
+  onClose,
+  notifications,
+  onClear,
+  onLocate,
+  onDismiss,
+  onDismissGroup,
+}: Props) {
   const listRef = useRef<HTMLDivElement>(null);
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+
+  // Build groups: Map<groupKey, NotificationRecord[]>
+  const groups: Map<string, NotificationRecord[]> = new Map();
+  for (const n of notifications) {
+    const k = notifGroupKey(n);
+    if (!groups.has(k)) groups.set(k, []);
+    groups.get(k)!.push(n);
+  }
+
+  function toggleGroup(gk: string) {
+    setCollapsed(prev => {
+      const next = new Set(prev);
+      if (next.has(gk)) next.delete(gk); else next.add(gk);
+      return next;
+    });
+  }
 
   return (
     <AnimatePresence>
@@ -64,7 +96,7 @@ export default function NotificationDrawer({ isOpen, onClose, notifications, onC
             transition={{ type: 'tween', duration: 0.25, ease: 'easeInOut' }}
             className="fixed z-[450] flex flex-col"
             style={{
-              top: 56,
+              top: 80,
               right: 0,
               bottom: 0,
               width: 'min(340px, calc(100vw - 24px))',
@@ -116,64 +148,106 @@ export default function NotificationDrawer({ isOpen, onClose, notifications, onC
                   <span className="text-[10px] font-mono text-[var(--text-muted)] tracking-widest">No alerts yet</span>
                 </div>
               ) : (
-                <div className="flex flex-col">
-                  {notifications.map((notif, i) => {
-                    const color = SEV_COLOR[notif.severity] ?? '#FFD700';
+                <div className="flex flex-col py-2">
+                  {Array.from(groups.entries()).map(([gk, groupNotifs]) => {
+                    const isCollapsed = collapsed.has(gk);
                     return (
+                    <div key={gk} className="mb-2">
+                      {/* Group header */}
                       <div
-                        key={notif.id}
-                        className="px-4 py-3"
-                        style={{
-                          borderBottom: i < notifications.length - 1
-                            ? '1px solid rgba(255,255,255,0.05)'
-                            : undefined,
-                        }}
+                        className="flex items-center justify-between px-4 py-1.5 cursor-pointer hover:bg-white/[0.03] transition-colors"
+                        onClick={() => toggleGroup(gk)}
                       >
-                        {/* Top row: severity dot + badge + timestamp */}
-                        <div className="flex items-center gap-1.5 mb-1">
-                          <div
-                            className="w-1.5 h-1.5 rounded-full flex-shrink-0"
-                            style={{ background: color, boxShadow: `0 0 5px ${color}80` }}
+                        <div className="flex items-center gap-1.5">
+                          <ChevronDown
+                            className="w-2.5 h-2.5 text-white/25 transition-transform"
+                            style={{ transform: isCollapsed ? 'rotate(-90deg)' : 'rotate(0deg)' }}
                           />
-                          <span
-                            className="text-[8px] font-mono font-bold tracking-widest uppercase"
-                            style={{ color }}
-                          >
-                            {notif.severity}
-                          </span>
-                          <span className="flex-1" />
-                          <span className="text-[8px] font-mono text-white/30 tabular-nums">
-                            {formatAlertTime(notif.timestamp)}
+                          <span className="text-[8px] font-mono tracking-widest uppercase text-white/30">
+                            {gk} ({groupNotifs.length})
                           </span>
                         </div>
-
-                        {/* Rule */}
-                        <p className="text-[8px] font-mono tracking-widest uppercase text-white/35 mb-0.5">
-                          {notif.rule}
-                        </p>
-
-                        {/* Title */}
-                        <p className="text-[11px] font-mono font-semibold text-white/85 leading-snug mb-0.5">
-                          {notif.title}
-                        </p>
-
-                        {/* Description */}
-                        <p className="text-[9px] font-mono text-white/40 leading-snug">
-                          {notif.description}
-                        </p>
-
-                        {/* Fly-to */}
-                        {notif.lat !== undefined && notif.lng !== undefined && onLocate && (
+                        {onDismissGroup && (
                           <button
-                            onClick={() => onLocate(notif.lat!, notif.lng!)}
-                            className="mt-1.5 flex items-center gap-1 text-[8px] font-mono text-[var(--cyan-primary)] hover:underline"
+                            onClick={e => { e.stopPropagation(); onDismissGroup(groupNotifs.map(n => n.id)); }}
+                            title="Dismiss group"
+                            className="text-[7px] font-mono text-white/20 hover:text-[#FF4081] transition-colors flex items-center gap-0.5"
                           >
-                            <MapPin className="w-2.5 h-2.5" />
-                            FLY TO
+                            <X className="w-2 h-2" />
+                            ALL
                           </button>
                         )}
                       </div>
-                    );
+
+                      {!isCollapsed && groupNotifs.map((notif, i) => {
+                        const color = SEV_COLOR[notif.severity] ?? '#FFD700';
+                        return (
+                          <div
+                            key={notif.id}
+                            className="px-4 py-3 group relative"
+                            style={{
+                              borderBottom: i < groupNotifs.length - 1
+                                ? '1px solid rgba(255,255,255,0.05)'
+                                : undefined,
+                            }}
+                          >
+                            {/* Top row: severity dot + badge + timestamp + dismiss */}
+                            <div className="flex items-center gap-1.5 mb-1">
+                              <div
+                                className="w-1.5 h-1.5 rounded-full flex-shrink-0"
+                                style={{ background: color, boxShadow: `0 0 5px ${color}80` }}
+                              />
+                              <span
+                                className="text-[8px] font-mono font-bold tracking-widest uppercase"
+                                style={{ color }}
+                              >
+                                {notif.severity}
+                              </span>
+                              <span className="flex-1" />
+                              <span className="text-[8px] font-mono text-white/30 tabular-nums">
+                                {formatAlertTime(notif.timestamp)}
+                              </span>
+                              {onDismiss && (
+                                <button
+                                  onClick={() => onDismiss(notif.id)}
+                                  title="Dismiss"
+                                  className="ml-1 opacity-0 group-hover:opacity-100 transition-opacity text-white/20 hover:text-[#FF4081]"
+                                >
+                                  <X className="w-2.5 h-2.5" />
+                                </button>
+                              )}
+                            </div>
+
+                            {/* Rule */}
+                            <p className="text-[8px] font-mono tracking-widest uppercase text-white/35 mb-0.5">
+                              {notif.rule}
+                            </p>
+
+                            {/* Title */}
+                            <p className="text-[11px] font-mono font-semibold text-white/85 leading-snug mb-0.5">
+                              {notif.title}
+                            </p>
+
+                            {/* Description */}
+                            <p className="text-[9px] font-mono text-white/40 leading-snug">
+                              {notif.description}
+                            </p>
+
+                            {/* Fly-to */}
+                            {notif.lat !== undefined && notif.lng !== undefined && onLocate && (
+                              <button
+                                onClick={() => onLocate(notif.lat!, notif.lng!)}
+                                className="mt-1.5 flex items-center gap-1 text-[8px] font-mono text-[var(--cyan-primary)] hover:underline"
+                              >
+                                <MapPin className="w-2.5 h-2.5" />
+                                FLY TO
+                              </button>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  );
                   })}
                 </div>
               )}

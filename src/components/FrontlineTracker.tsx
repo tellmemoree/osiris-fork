@@ -75,7 +75,7 @@ export default function FrontlineTracker({ isMobile = false }: { isMobile?: bool
       }`}
     >
       <div className="mb-2 flex items-center gap-2">
-        <Activity size={13} strokeWidth={2.5} style={{ color: '#FF3D3D' }} />
+        <Activity size={13} strokeWidth={2.5} style={{ color: (d.delta_1d ?? d.delta_7d) === null ? '#8A8880' : (d.delta_1d ?? d.delta_7d)! > 0 ? '#FF3D3D' : '#00E676' }} />
         <span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-white/60">
           Frontline Footprint
         </span>
@@ -87,14 +87,20 @@ export default function FrontlineTracker({ isMobile = false }: { isMobile?: bool
       </div>
 
       <div className="space-y-1.5">
-        <Delta label="24h" v={d.delta_1d} />
-        <Delta label={d.since_date ? `vs ${d.since_date}` : '7d'} v={d.delta_7d} />
+        {d.snapshots < 2 ? (
+          <div className="text-[10px] text-white/30 leading-snug">Calibrating — first delta available after 24h</div>
+        ) : (
+          <>
+            <Delta label="24h" v={d.delta_1d} />
+            <Delta label={d.since_date ? `vs ${d.since_date}` : '7d'} v={d.delta_7d} />
+          </>
+        )}
       </div>
 
       {d.note && <div className="mt-2 text-[10px] leading-snug text-white/35">{d.note}</div>}
 
       <div className="mt-2.5 border-t border-white/10 pt-2 text-[9px] leading-snug text-white/30">
-        ▲ RU expansion · ▼ contraction · DeepState
+        ▲ RU gain · ▼ UA advance · DeepState
       </div>
     </div>
   );

@@ -2,6 +2,11 @@ import { NextResponse } from 'next/server';
 import { getThreatCorpus, buildRoute } from '@/lib/telegram-threats';
 import type { RouteWave, WeaponType } from '@/lib/telegram-threats';
 import { readAlarmHistory, isOblastAlarmed } from '@/lib/alarm-history';
+import {
+  MISSILE_TRACKS_FILE, MISSILE_TRACK_TTL_MS,
+  loadTrackEntries, mergeAndSaveTracks, buildWavesFromEntries, wavesToTrackEntries,
+  type TrackEntry,
+} from '@/lib/threat-tracks';
 
 export const dynamic = 'force-dynamic';
 
@@ -20,7 +25,7 @@ export const dynamic = 'force-dynamic';
 const WINDOW_HOURS = 1.5;
 const CACHE_TTL_MS = 60_000;
 
-const MISSILE_TYPES = ['CRUISE', 'BALLISTIC', 'KINZHAL', 'KH22'] as const;
+const MISSILE_TYPES = ['CRUISE', 'BALLISTIC', 'KINZHAL', 'KH22', 'S300'] as const;
 type MissileType = typeof MISSILE_TYPES[number];
 
 const MISSILE_META: Record<MissileType, { label: string; color: string }> = {
@@ -28,6 +33,7 @@ const MISSILE_META: Record<MissileType, { label: string; color: string }> = {
   BALLISTIC: { label: 'Ballistic',       color: '#FF8C00' },
   KINZHAL:   { label: 'Kinzhal',         color: '#FFD700' },
   KH22:      { label: 'Kh-22',           color: '#FF69B4' },
+  S300:      { label: 'S-300',           color: '#9C27B0' },
 };
 
 interface MissileRoute {
@@ -50,14 +56,17 @@ let cached:   MissileResponse | null = null;
 let cachedAt                         = 0;
 let inflight: Promise<MissileResponse> | null = null;
 
+// Seed in-memory with stored history on module load
+let trackSeed = loadTrackEntries(MISSILE_TRACKS_FILE);
+
 async function buildMissileResponse(): Promise<MissileResponse> {
   const messages = await getThreatCorpus();
   const routes: MissileRoute[] = [];
 
-  // Load alarm history once; shared across all missile types.
-  // Missiles are fast and alarms are issued PRE-EMPTIVELY — the oblast may be
-  // alarmed up to 60 min before the Telegram sighting, and only 15 min after.
   const alarmHistory = await readAlarmHistory();
+
+  // Collect all new waypoints across missile types for joint persistence
+  const allNewEntries: TrackEntry[] = [];
 
   for (const wt of MISSILE_TYPES) {
     const waves = buildRoute(messages, wt as WeaponType);
@@ -68,6 +77,22 @@ async function buildMissileResponse(): Promise<MissileResponse> {
         wp.alarmConfirmed = isOblastAlarmed(wp.oblast, wp.ts, alarmHistory, 60 * 60_000, 15 * 60_000);
       }
     }
+
+    // Collect for persistence (tagged with weaponType)
+    allNewEntries.push(...wavesToTrackEntries(waves, wt));
+  }
+
+  // Merge all missile waypoints into single 12h store (all types share one file;
+  // weaponType field preserves per-type identity for route reconstruction)
+  const accumulated = await mergeAndSaveTracks(MISSILE_TRACKS_FILE, MISSILE_TRACK_TTL_MS, allNewEntries);
+
+  // Rebuild per-type routes from 12h accumulated history
+  for (const wt of MISSILE_TYPES) {
+    const typeEntries = accumulated.filter(e => e.weaponType === wt);
+    if (typeEntries.length === 0) continue;
+
+    const waves = buildWavesFromEntries(typeEntries);
+    if (waves.length === 0) continue;
 
     const allWaypoints = waves.flatMap(w => w.waypoints);
     const sources = [...new Set(allWaypoints.map(w => `t.me/${w.channel}`))];
@@ -98,17 +123,49 @@ export async function GET() {
     });
   }
 
+  // Cold-start seed: populate cache from disk history before first corpus refresh
+  if (!cached) {
+    const seed = await trackSeed;
+    if (seed.length > 0) {
+      const seedRoutes: MissileRoute[] = [];
+      for (const wt of MISSILE_TYPES) {
+        const typeEntries = seed.filter(e => e.weaponType === wt);
+        if (typeEntries.length === 0) continue;
+        const waves = buildWavesFromEntries(typeEntries);
+        if (waves.length === 0) continue;
+        const allWps = waves.flatMap(w => w.waypoints);
+        if (allWps.length === 0) continue;
+        seedRoutes.push({
+          weaponType: wt, ...MISSILE_META[wt], waves,
+          latestAt: allWps[allWps.length - 1].ts,
+          sources: [...new Set(allWps.map(w => `t.me/${w.channel}`))],
+        });
+      }
+      cached = { routes: seedRoutes, total: seedRoutes.length, window_hours: WINDOW_HOURS, timestamp: new Date().toISOString() };
+    }
+  }
+
   if (inflight) {
     try {
       return NextResponse.json(await inflight, {
         headers: { 'Cache-Control': 'public, s-maxage=60, stale-while-revalidate=120' },
       });
     } catch {
+      if (cached) return NextResponse.json(cached, { headers: { 'Cache-Control': 'public, s-maxage=60, stale-while-revalidate=120' } });
       return NextResponse.json(
         { routes: [], total: 0, window_hours: WINDOW_HOURS, error: 'Failed to fetch missile threats' },
         { status: 500 },
       );
     }
+  }
+
+  // Stale-while-revalidate: return stale immediately, compute in background
+  if (cached) {
+    inflight = buildMissileResponse();
+    inflight.then(data => { cached = data; cachedAt = Date.now(); }).catch(() => {}).finally(() => { inflight = null; });
+    return NextResponse.json(cached, {
+      headers: { 'Cache-Control': 'public, s-maxage=60, stale-while-revalidate=120' },
+    });
   }
 
   inflight = buildMissileResponse();

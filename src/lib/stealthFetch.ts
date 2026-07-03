@@ -82,10 +82,11 @@ export function stealthHeaders(extraHeaders?: Record<string, string>): Record<st
 /**
  * Perform a fetch with stealth headers injected automatically.
  * Drop-in replacement for global fetch() with identical signature.
+ * Pass hardTimeoutMs to override the default 10s safety-net (e.g. large responses).
  */
 export async function stealthFetch(
   url: string | URL | Request,
-  init?: RequestInit
+  init?: RequestInit & { hardTimeoutMs?: number }
 ): Promise<Response> {
   const headers = stealthHeaders(
     init?.headers ? Object.fromEntries(
@@ -102,7 +103,8 @@ export async function stealthFetch(
     init.signal.addEventListener('abort', () => controller.abort());
   }
 
-  const timeoutId = setTimeout(() => controller.abort(new Error('stealthFetch Hard Timeout')), 10000);
+  const hardTimeout = init?.hardTimeoutMs ?? 10000;
+  const timeoutId = setTimeout(() => controller.abort(new Error('stealthFetch Hard Timeout')), hardTimeout);
 
   try {
     const res = await fetch(url, { ...init, headers, signal: controller.signal });

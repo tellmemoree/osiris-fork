@@ -109,7 +109,15 @@ const OIL_NAMES: Record<string, string> = { 'CL=F': 'WTI Crude', 'BZ=F': 'Brent 
 const CRYPTO_NAMES: Record<string, string> = { 'BTC-USD': 'Bitcoin', 'ETH-USD': 'Ethereum' };
 const INDEX_NAMES: Record<string, string> = { 'ES=F': 'S&P 500', 'NQ=F': 'Nasdaq 100' };
 
+const CACHE_TTL = 60_000; // 1 min — markets don't need sub-minute freshness
+let cachedMarkets: Record<string, unknown> | null = null;
+let lastFetch = 0;
+
 export async function GET() {
+  const now = Date.now();
+  if (cachedMarkets && now - lastFetch < CACHE_TTL) {
+    return NextResponse.json(cachedMarkets, { headers: { 'Cache-Control': 'public, s-maxage=60, stale-while-revalidate=120' } });
+  }
   try {
     // Fetch all in parallel
     const [stockResults, oilResults, commodityResults, yahooResults, indexResults, cgCrypto] = await Promise.all([
@@ -144,22 +152,27 @@ export async function GET() {
     // --- SCM Integration: Chokepoint-Commodity Correlation ---
     const scm_alerts: string[] = [];
     try {
-      const maritimeRes = await fetch('http://127.0.0.1:3000/api/maritime', { signal: AbortSignal.timeout(3000) });
+      const origin = process.env.OSIRIS_SELF_ORIGIN ?? 'http://127.0.0.1:3000';
+      const maritimeRes = await fetch(`${origin}/api/maritime`, { signal: AbortSignal.timeout(3000) });
       if (maritimeRes.ok) {
         const maritimeData = await maritimeRes.json();
-        const chokepoints = maritimeData.chokepoints || [];
-        
-        const hormuz = chokepoints.find((c: { name?: string; risk?: string }) => c.name === 'Strait of Hormuz');
-        const suez = chokepoints.find((c: { name?: string; risk?: string }) => c.name === 'Suez Canal');
-        const panama = chokepoints.find((c: { name?: string; risk?: string }) => c.name === 'Panama Canal');
+        const chokepoints: Array<{ id?: string; name?: string; risk?: string; live_ships?: number }> = maritimeData.chokepoints || [];
 
-        if (hormuz && (hormuz.risk === 'CRITICAL' || hormuz.risk === 'HIGH')) {
+        const hormuz   = chokepoints.find(c => c.id === 'hormuz');
+        const suezN    = chokepoints.find(c => c.id === 'suez_north');
+        const suezS    = chokepoints.find(c => c.id === 'suez_south');
+        const panama   = chokepoints.find(c => c.id === 'panama');
+
+        // Only fire an alert when live_ships > 0 — zero ships means no actual congestion.
+        if (hormuz && (hormuz.live_ships ?? 0) > 0 && (hormuz.risk === 'CRITICAL' || hormuz.risk === 'HIGH')) {
           scm_alerts.push(`🚨 HORMUZ ${hormuz.risk}: High risk of WTI/Brent Crude price spike due to congestion.`);
         }
-        if (suez && (suez.risk === 'CRITICAL' || suez.risk === 'HIGH')) {
+        // Use whichever Suez entry has the higher risk (north or south transit).
+        const suez = [suezN, suezS].find(c => c && (c.live_ships ?? 0) > 0 && (c.risk === 'CRITICAL' || c.risk === 'HIGH'));
+        if (suez) {
           scm_alerts.push(`🚨 SUEZ ${suez.risk}: Potential supply chain delays impacting European markets and Energy.`);
         }
-        if (panama && (panama.risk === 'CRITICAL' || panama.risk === 'HIGH')) {
+        if (panama && (panama.live_ships ?? 0) > 0 && (panama.risk === 'CRITICAL' || panama.risk === 'HIGH')) {
           scm_alerts.push(`🚨 PANAMA ${panama.risk}: LNG and Agriculture (Corn/Wheat) shipment delays expected.`);
         }
       }
@@ -167,11 +180,10 @@ export async function GET() {
       // Ignore if maritime is unreachable
     }
 
-    return NextResponse.json({
-      stocks, oil, commodities, crypto, indices, scm_alerts,
-      timestamp: new Date().toISOString(),
-    }, {
-      headers: { 'Cache-Control': 'no-store' }, // Prevent caching so alerts update real-time
+    cachedMarkets = { stocks, oil, commodities, crypto, indices, scm_alerts, timestamp: new Date().toISOString() };
+    lastFetch = now;
+    return NextResponse.json(cachedMarkets, {
+      headers: { 'Cache-Control': 'public, s-maxage=60, stale-while-revalidate=120' },
     });
   } catch (error) {
     console.error('Markets fetch error:', error);

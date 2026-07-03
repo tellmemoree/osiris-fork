@@ -5,9 +5,33 @@ import { NextResponse } from 'next/server';
  * OSIRIS — Earthquake Data API
  * Fetches real-time seismic events from USGS (last 24h, M2.5+)
  * No API key required
+ *
+ * Cache: 5-min module-level cache — USGS feed updates ~every minute but data is
+ * identical across all clients within the 15-min client poll window.
  */
 
+const CACHE_TTL = 5 * 60_000; // 5 min — balances USGS update frequency vs. request fan-out
+
+const CACHE_HEADERS = {
+  'Cache-Control': 'public, s-maxage=300, stale-while-revalidate=600',
+} as const;
+
+type EarthquakePayload = {
+  earthquakes: unknown[];
+  total: number;
+  timestamp: string;
+};
+
+let cachedEarthquakes: EarthquakePayload | null = null;
+let lastFetch = 0;
+
 export async function GET() {
+  const now = Date.now();
+
+  // Serve from module-level cache if fresh (5-min TTL)
+  if (cachedEarthquakes && now - lastFetch < CACHE_TTL) {
+    return NextResponse.json(cachedEarthquakes, { headers: CACHE_HEADERS });
+  }
   try {
     const url = 'https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/2.5_day.geojson';
     const res = await fetch(url, {
@@ -15,6 +39,9 @@ export async function GET() {
     });
 
     if (!res.ok) {
+      if (cachedEarthquakes) {
+        return NextResponse.json(cachedEarthquakes, { headers: CACHE_HEADERS });
+      }
       return NextResponse.json({ earthquakes: [], error: 'USGS unavailable' });
     }
 
@@ -40,17 +67,21 @@ export async function GET() {
       };
     });
 
-    return NextResponse.json({
+    const payload: EarthquakePayload = {
       earthquakes,
       total: earthquakes.length,
       timestamp: new Date().toISOString(),
-    }, {
-      headers: {
-        'Cache-Control': 'public, s-maxage=60, stale-while-revalidate=120',
-      },
-    });
+    };
+    cachedEarthquakes = payload;
+    lastFetch = now;
+
+    return NextResponse.json(payload, { headers: CACHE_HEADERS });
   } catch (error) {
     console.error('Earthquake fetch error:', error);
+    // Serve stale cache on upstream failure rather than an empty response
+    if (cachedEarthquakes) {
+      return NextResponse.json(cachedEarthquakes, { headers: CACHE_HEADERS });
+    }
     return NextResponse.json({ earthquakes: [], error: 'Failed to fetch earthquake data' }, { status: 500 });
   }
 }

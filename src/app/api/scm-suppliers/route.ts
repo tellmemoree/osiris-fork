@@ -61,7 +61,7 @@ export async function GET() {
     const fireRes = await fetch('http://127.0.0.1:3000/api/fires', { signal: AbortSignal.timeout(5000) });
     if (fireRes.ok) {
       const fireData = await fireRes.json();
-      const fires = fireData.data || [];
+      const fires = fireData.fires || [];
       dynamicSuppliers.forEach(sup => {
         const nearbyFires = fires.filter((f: { lat: number; lng: number }) => getDistanceKm(sup.lat, sup.lng, f.lat, f.lng) < 50); // 50km fire zone
         if (nearbyFires.length > 0) {

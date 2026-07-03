@@ -4,7 +4,16 @@ import { NextResponse } from 'next/server';
  * OSIRIS — Global Infrastructure API
  * Tracks critical global infrastructure: Nuclear Power Plants worldwide
  * Comprehensive coverage including all Russian, Chinese, and strategically important facilities
+ *
+ * Cache TTL: 15 min — seismic risk overlay updates at most every few hours.
  */
+
+export const dynamic = 'force-dynamic';
+
+const CACHE_TTL = 15 * 60_000;
+type InfraPayload = { infrastructure: typeof NUCLEAR_FACILITIES; total: number; timestamp: string };
+let cachedInfra: InfraPayload | null = null;
+let lastFetch = 0;
 
 const NUCLEAR_FACILITIES = [
   // ═══ EUROPE ═══
@@ -94,6 +103,12 @@ const NUCLEAR_FACILITIES = [
 ];
 
 export async function GET() {
+  if (cachedInfra && Date.now() - lastFetch < CACHE_TTL) {
+    return NextResponse.json(cachedInfra, {
+      headers: { 'Cache-Control': 'public, s-maxage=900, stale-while-revalidate=1800' },
+    });
+  }
+
   let dynamicFacilities = [...NUCLEAR_FACILITIES];
 
   try {
@@ -131,14 +146,15 @@ export async function GET() {
     // Fallback to static list if API fails
   }
 
-  return NextResponse.json({
+  const payload: InfraPayload = {
     infrastructure: dynamicFacilities,
     total: dynamicFacilities.length,
     timestamp: new Date().toISOString(),
-  }, {
-    headers: { 
-      'Cache-Control': 'no-store, no-cache, must-revalidate',
-      'Pragma': 'no-cache'
-    }
+  };
+  cachedInfra = payload;
+  lastFetch = Date.now();
+
+  return NextResponse.json(payload, {
+    headers: { 'Cache-Control': 'public, s-maxage=900, stale-while-revalidate=1800' },
   });
 }
