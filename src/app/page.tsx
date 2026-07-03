@@ -151,6 +151,7 @@ export default function Dashboard() {
   const [notifOpen, setNotifOpen] = useState(false);
   const [notificationLog, setNotificationLog] = useState<NotificationRecord[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
+  const [showConfidenceLegends, setShowConfidenceLegends] = useState(true);
 
   const isMobile = useIsMobile();
   const startTime = useRef(Date.now());
@@ -1476,6 +1477,74 @@ export default function Dashboard() {
 
       {/* Keyboard Shortcuts Overlay */}
       <KeyboardShortcuts />
+
+      {/* ── Confidence Legends (desktop) ── */}
+      {!isMobile && (activeLayers.thermal_aoi || activeLayers.captures || activeLayers.drone_threats || activeLayers.missile_threats) && (
+        <div className="absolute bottom-[88px] right-4 z-[202] pointer-events-auto select-none">
+          <div className="glass-panel p-2 text-[8px] font-mono tracking-widest min-w-[148px]">
+            <button
+              onClick={() => setShowConfidenceLegends(v => !v)}
+              className="flex items-center gap-1 w-full hover:opacity-80 transition-opacity mb-0.5"
+            >
+              <span className="flex-1 text-left text-[7px] tracking-widest text-[var(--gold-primary)]/70 uppercase">Confidence</span>
+              <span className="text-[8px] text-[var(--text-muted)]">{showConfidenceLegends ? '▲' : '▼'}</span>
+            </button>
+            {showConfidenceLegends && (
+              <div className="space-y-2 pt-0.5">
+                {/* Thermal AOI */}
+                {activeLayers.thermal_aoi && (
+                  <div>
+                    <div className="text-[6px] text-[var(--text-muted)] tracking-widest mb-1 uppercase">Thermal AOI</div>
+                    <div className="flex items-center gap-1.5 mb-0.5">
+                      <span className="inline-block w-2.5 h-2.5 rounded-full flex-shrink-0 border border-[#FFD700]" style={{ background: '#FF9500', opacity: 0.9 }} />
+                      <span className="text-[var(--text-secondary)]">Fire / video corroborated</span>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <span className="inline-block w-2.5 h-2.5 rounded-full flex-shrink-0 border-2 border-[#FF8C00] relative overflow-hidden" style={{ background: '#FF9500', opacity: 0.45 }}>
+                        <span className="absolute inset-0 flex items-center justify-center text-[#FF8C00] font-bold" style={{ fontSize: '6px', lineHeight: 1 }}>?</span>
+                      </span>
+                      <span className="text-[var(--text-secondary)] opacity-60">Unconfirmed / single-source</span>
+                    </div>
+                  </div>
+                )}
+                {/* Captures */}
+                {activeLayers.captures && (
+                  <div>
+                    <div className="text-[6px] text-[var(--text-muted)] tracking-widest mb-1 uppercase">Captures</div>
+                    <div className="flex items-center gap-1.5 mb-0.5">
+                      <span className="inline-block w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ background: '#FF3D3D' }} />
+                      <span className="text-[var(--text-secondary)]">RU territorial gain</span>
+                    </div>
+                    <div className="flex items-center gap-1.5 mb-0.5">
+                      <span className="inline-block w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ background: '#2979FF' }} />
+                      <span className="text-[var(--text-secondary)]">UA territorial gain</span>
+                    </div>
+                    <div className="flex items-center gap-1.5 mb-0.5">
+                      <span className="inline-block w-2.5 h-2.5 rounded-full flex-shrink-0 border border-[#FF8C00]" style={{ background: '#FFD700' }} />
+                      <span className="text-[var(--text-secondary)]">Conflicted claim</span>
+                    </div>
+                    <div className="text-[6px] text-[var(--text-muted)] italic">Size = corroboration count</div>
+                  </div>
+                )}
+                {/* Drone / Missile */}
+                {(activeLayers.drone_threats || activeLayers.missile_threats) && (
+                  <div>
+                    <div className="text-[6px] text-[var(--text-muted)] tracking-widest mb-1 uppercase">Drone / Missile</div>
+                    <div className="flex items-center gap-1.5 mb-0.5">
+                      <span className="inline-block w-2.5 h-2.5 rounded-full flex-shrink-0 border-2 border-[#FF1744]" style={{ background: '#CE93D8' }} />
+                      <span className="text-[var(--text-secondary)]">≥2 channels corroborated</span>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <span className="inline-block w-2.5 h-2.5 rounded-full flex-shrink-0 border border-[#E040FB]" style={{ background: '#CE93D8', opacity: 0.65 }} />
+                      <span className="text-[var(--text-secondary)] opacity-65">Single-source sighting</span>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* ── GLOBAL STATUS TICKER (bottom) ── */}
       <GlobalStatusBar />
