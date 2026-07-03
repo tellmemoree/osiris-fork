@@ -95,7 +95,7 @@ export default function IntelFeed({ data, onLocate }: IntelFeedProps) {
       {/* Header */}
       <button
         onClick={() => setExpanded(!expanded)}
-        className="flex items-center justify-between px-4 py-3 hover:bg-[var(--hover-accent)] transition-colors"
+        className="flex items-center justify-between px-4 py-3 hover:bg-[var(--hover-accent)] transition-colors md:hidden"
       >
         <div className="flex items-center gap-2">
           <Newspaper className="w-3.5 h-3.5 text-[var(--gold-primary)]" />
