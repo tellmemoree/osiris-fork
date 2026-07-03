@@ -253,6 +253,7 @@ export default function Dashboard() {
     internet_outages: false,
     malware: false,
     oblast_pressure: false,
+    mig31k: false,
   });
   // Persist active layer toggles across restarts — read on mount, write on every change.
   // Skip the first write (count=1, initial defaults) so we don't overwrite saved state
@@ -565,6 +566,7 @@ export default function Dashboard() {
     malware: () => fetchEndpoint('/api/malware', d => ({ malware_threats: d.threats })),
     oblast_pressure: () => fetchEndpoint('/api/oblast-pressure', (d: any) => ({ oblast_pressure: d.oblasts ?? [] })),
     shadow_fleet_tracks: () => fetchEndpoint('/api/maritime?tracks=1', (d: any) => ({ shadow_fleet_tracks: d.tracks ?? [] })),
+    mig31k: () => fetchEndpoint('/api/mig31k', d => ({ mig31k: { detections: d.detections ?? [], updatedAt: d.timestamp } })).then(() => setLayerTimestamps(p => ({ ...p, mig31k: Date.now() }))),
   }), [fetchEndpoint]);
 
   // Fetch a source at most once (does NOT toggle the layer on).
@@ -586,7 +588,7 @@ export default function Dashboard() {
   // loadOnce() skips keys already fetched by active layers.
   useEffect(() => {
     const t1 = setTimeout(() => {
-      ['flights', 'air_raids', 'kab_threats', 'power_outages', 'frontlines', 'captures'].forEach(loadOnce);
+      ['flights', 'air_raids', 'kab_threats', 'power_outages', 'frontlines', 'captures', 'mig31k'].forEach(loadOnce);
     }, 1000);
     const t2 = setTimeout(() => {
       ['thermal_aoi', 'satellites', 'fires', 'weather', 'infrastructure', 'gdelt', 'radiation'].forEach(loadOnce);
@@ -634,6 +636,7 @@ export default function Dashboard() {
     if (activeLayers.malware) loadOnce('malware');
     if (activeLayers.oblast_pressure) loadOnce('oblast_pressure');
     if (activeLayers.shadow_fleet_tracks) loadOnce('shadow_fleet_tracks');
+    if (activeLayers.mig31k) loadOnce('mig31k');
   }, [activeLayers, loadOnce]);
 
   // Background pre-fetch: populate LayerPanel counts for every layer
@@ -646,7 +649,7 @@ export default function Dashboard() {
        'fires', 'weather', 'infrastructure', 'gdelt',
        'maritime', 'radiation', 'live_news', 'cctv',
        'air_quality', 'internet_outages', 'malware',
-       'weapon_threats', 'drone_threats', 'missile_threats', 'ru_air_raids'].forEach(loadOnce);
+       'weapon_threats', 'drone_threats', 'missile_threats', 'ru_air_raids', 'mig31k'].forEach(loadOnce);
     }, 3000);
     return () => clearTimeout(t);
   }, [loadOnce]);
@@ -733,6 +736,9 @@ export default function Dashboard() {
     }
     if (activeLayers.malware) {
       intervals.push(setInterval(() => fetchEndpoint('/api/malware', d => ({ malware_threats: d.threats })), 900000)); // 15 min
+    }
+    if (activeLayers.mig31k) {
+      intervals.push(setInterval(() => fetchEndpoint('/api/mig31k', d => ({ mig31k: { detections: d.detections ?? [], updatedAt: d.timestamp } })).then(() => setLayerTimestamps(p => ({ ...p, mig31k: Date.now() }))), 60000)); // 1 min
     }
     return () => intervals.forEach(clearInterval);
   }, [activeLayers, fetchEndpoint]);
