@@ -1562,8 +1562,9 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
           <div><span style="color:#5C5A54;">REPORTED</span><br/><span style="color:#E8E6E0;">${p.ts ? new Date(p.ts).toUTCString().slice(5,17)+' UTC' : '—'}</span></div>
           <div><span style="color:#5C5A54;">SOURCES</span><br/><span style="color:#E8E6E0;font-size:8px;">${esc(p.sources)||'—'}</span></div>
         </div>
-        ${confidence > 1 ? `<div style="margin-top:6px;font-size:9px;color:#5C5A54;">Sources: <span style="color:#00E676;">${confidence} channels</span></div>` : ''}
-        ${p.alarmConfirmed ? '<div style="margin-top:6px;padding:3px 6px;background:rgba(255,23,68,0.15);border:1px solid rgba(255,23,68,0.4);border-radius:3px;color:#FF1744;font-size:8px;font-weight:700;letter-spacing:0.05em;">AIR RAID ALARM CORROBORATED</div>' : ''}
+        ${p.alarmConfirmed
+          ? '<div style="margin-top:6px;padding:3px 6px;background:rgba(255,23,68,0.15);border:1px solid rgba(255,23,68,0.4);border-radius:3px;color:#FF1744;font-size:8px;font-weight:700;letter-spacing:0.05em;">AIR RAID ALARM CORROBORATED</div>'
+          : '<div style="margin-top:6px;padding:3px 6px;background:rgba(92,90,84,0.12);border:1px solid rgba(92,90,84,0.35);border-radius:3px;color:#8C8A84;font-size:8px;font-weight:700;letter-spacing:0.05em;">NOT YET CORROBORATED</div>'}
         <div style="font-size:8px;color:#5C5A54;margin-top:8px;font-style:italic;">Confirmed sighting signal — verify before acting.</div>
       </div>`);
     });
@@ -2698,6 +2699,39 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
       },
     })));
   }, [mapReady, data, activeLayers.correlated_events, setGeo]);
+
+  // Alarm Vectors — unified wave-propagation LineStrings fed into the 'alarm-vectors' source.
+  // Combines drone sighting waves (when drone layer is active) and missile alarm_vectors
+  // (when missile layer is active). Each feature carries a 'color' property so layers
+  // can colour-code by threat type. Missile vectors are gated by activeLayers.missile_threats
+  // (same toggle as all other missile layers).
+  useEffect(() => {
+    if (!mapReady) return;
+    const features: any[] = [];
+    // Drone propagation vectors
+    const droneWaves: any[] = activeLayers.drone_threats && data.drone_waves ? data.drone_waves : [];
+    for (const wave of droneWaves) {
+      const wps: any[] = wave.waypoints || [];
+      if (wps.length < 2) continue;
+      features.push({
+        type: 'Feature',
+        geometry: { type: 'LineString', coordinates: wps.map((w: any) => [w.lng, w.lat]) },
+        properties: { color: '#CE93D8', threatType: 'DRONE', waveIndex: wave.waveIndex },
+      });
+    }
+    // Missile propagation vectors (from alarm_vectors field)
+    const missileVectors: any[] = activeLayers.missile_threats && data.missile_alarm_vectors ? data.missile_alarm_vectors : [];
+    for (const wave of missileVectors) {
+      const wps: any[] = wave.waypoints || [];
+      if (wps.length < 2) continue;
+      features.push({
+        type: 'Feature',
+        geometry: { type: 'LineString', coordinates: wps.map((w: any) => [w.lng, w.lat]) },
+        properties: { color: '#FF4444', threatType: 'MISSILE', waveIndex: wave.waveIndex },
+      });
+    }
+    setGeo('alarm-vectors', features);
+  }, [mapReady, data.drone_waves, data.missile_alarm_vectors, activeLayers.drone_threats, activeLayers.missile_threats, setGeo]);
 
   // RU Oblast Alerts (Russian border oblast drone/strike incursions).
   useEffect(() => {
