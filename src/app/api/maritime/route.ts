@@ -581,9 +581,16 @@ async function vesselApiFetchBox(
   return ships;
 }
 
+const VESSEL_API_SILENCE_MS = 30 * 60 * 1000; // 30 min AIS silence before activating fallback
+
 async function runVesselApiSweep() {
   if (!process.env.VESSEL_API_KEY) return;
-  if (Date.now() >= globalForAis.vesselApiCallsResetAt) {
+  // Only run when the live AIS stream has been silent for >30 min. If AIS is
+  // healthy there is no reason to spend the REST budget.
+  const now = Date.now();
+  const lastMsg = globalForAis.lastAisMessageAt;
+  if (lastMsg !== null && now - lastMsg < VESSEL_API_SILENCE_MS) return;
+  if (now >= globalForAis.vesselApiCallsResetAt) {
     globalForAis.vesselApiCallsToday = 0;
     globalForAis.vesselApiCallsResetAt = nextMidnightUtc();
   }
@@ -600,7 +607,10 @@ async function runVesselApiSweep() {
       const lng = v.lon ?? v.lng ?? v.longitude;
       if (!mmsi || !lat || !lng) continue;
       const existing = globalForAis.shipsCache.get(mmsi);
-      if (!existing || (existing as any).source === 'vesselapi') {
+      // During an AIS outage, update any ship regardless of source so stale
+      // AIS-sourced positions are refreshed. Without this guard removal the
+      // fallback can't refresh the very ships it exists to keep current.
+      if (!existing || now - existing.timestamp > STALE_MS) {
         globalForAis.shipsCache.set(mmsi, {
           id: mmsi, mmsi, lat, lng,
           speed: v.sog ?? v.speed ?? 0,
@@ -674,10 +684,15 @@ async function gfwEnrichNext() {
     if (res.ok) {
       const json = await res.json();
       const info = json?.entries?.[0]?.selfReportedInfo?.[0];
+      // Always write an entry — even when GFW has no record for this MMSI.
+      // Without a sentinel the selection loop re-picks the same MMSI on every
+      // 5s tick and enrichment never advances past the first unenrichable vessel.
+      const record = info
+        ? { flag: info.flag, imo: info.imo ?? undefined, name: info.shipname ?? undefined, fetchedAt: Date.now() }
+        : { fetchedAt: Date.now() };
+      globalForAis.gfwEnrichment.set(target, record);
+      // Persist asynchronously (only when we have substantive identity data)
       if (info) {
-        const record = { flag: info.flag, imo: info.imo ?? undefined, name: info.shipname ?? undefined, fetchedAt: Date.now() };
-        globalForAis.gfwEnrichment.set(target, record);
-        // Persist asynchronously
         const payload = [...globalForAis.gfwEnrichment.entries()].map(([mmsi, v]) => ({ mmsi, ...v }));
         fs.mkdir(SHADOW_STATE_DIR, { recursive: true })
           .then(() => fs.writeFile(GFW_ENRICH_FILE, JSON.stringify(payload), 'utf8'))

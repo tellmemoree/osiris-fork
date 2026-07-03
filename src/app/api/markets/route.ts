@@ -187,6 +187,13 @@ export async function GET() {
     });
   } catch (error) {
     console.error('Markets fetch error:', error);
+    // Serve the last good cache on a failed refresh rather than an empty 500
+    // (matches weather/earthquakes/oblast-pressure).
+    if (cachedMarkets) {
+      return NextResponse.json(cachedMarkets, {
+        headers: { 'Cache-Control': 'public, s-maxage=60, stale-while-revalidate=120', 'X-Stale': 'true' },
+      });
+    }
     return NextResponse.json({ stocks: {}, oil: {}, commodities: {}, crypto: {}, indices: {}, scm_alerts: [], error: 'Failed' }, { status: 500 });
   }
 }

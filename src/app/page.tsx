@@ -415,34 +415,39 @@ export default function Dashboard() {
     if (!time) return;
     const al = activeLayersRef.current;
     const sd = sessionDisabledRef.current;
+
+    // Decide which analyst-hidden layers to auto-enable from the refs FIRST.
+    // setState updaters must be pure (React may invoke them twice in StrictMode /
+    // concurrent rendering), so we never call setLayerToasts inside the
+    // setActiveLayers updater.
+    const toEnable = Object.values(TIMELINE_TYPE_TO_LAYER).filter(
+      layerKey => layerKey in al && !al[layerKey as keyof typeof al] && !sd.has(layerKey),
+    );
+    if (toEnable.length === 0) return;
+
     setActiveLayers(prev => {
       const next = { ...prev };
-      let changed = false;
-      Object.entries(TIMELINE_TYPE_TO_LAYER).forEach(([, layerKey]) => {
-        if (!(layerKey in next)) return;
-        if (!next[layerKey as keyof typeof next] && !sd.has(layerKey)) {
-          (next as Record<string, boolean>)[layerKey] = true;
-          changed = true;
-          setLayerToasts(toasts => {
-            if (toasts.some(t => t.layerKey === layerKey)) return toasts;
-            const toastId = `${layerKey}-${Date.now()}`;
-            return [...toasts, {
-              id: toastId, layerKey,
-              layerLabel: layerKey.replace(/_/g, ' '),
-              eventCount: 0,
-              timeLabel: 'timeline scrub',
-              onUndo: () => {
-                setActiveLayers((p: any) => ({ ...p, [layerKey]: false }));
-                setSessionDisabled((p: Set<string>) => new Set([...p, layerKey]));
-                setLayerToasts((p: TimelineLayerToastItem[]) => p.filter(t => t.layerKey !== layerKey));
-              },
-            }];
-          });
-        }
-      });
-      return changed ? next : prev;
+      for (const layerKey of toEnable) (next as Record<string, boolean>)[layerKey] = true;
+      return next;
     });
-  }, [timelineRangeH]); // eslint-disable-line react-hooks/exhaustive-deps
+    setLayerToasts(toasts => {
+      const add = toEnable
+        .filter(layerKey => !toasts.some(t => t.layerKey === layerKey))
+        .map(layerKey => ({
+          id: `${layerKey}-${Date.now()}`,
+          layerKey,
+          layerLabel: layerKey.replace(/_/g, ' '),
+          eventCount: 0,
+          timeLabel: 'timeline scrub',
+          onUndo: () => {
+            setActiveLayers((p: any) => ({ ...p, [layerKey]: false }));
+            setSessionDisabled((p: Set<string>) => new Set([...p, layerKey]));
+            setLayerToasts((p: TimelineLayerToastItem[]) => p.filter(t => t.layerKey !== layerKey));
+          },
+        }));
+      return add.length ? [...toasts, ...add] : toasts;
+    });
+  }, []); // reads refs + stable setters only
 
   const handleAxisFocus = useCallback((name: string | null, bbox: [number, number, number, number] | null) => {
     setFocusedAxis(name);
@@ -618,7 +623,7 @@ export default function Dashboard() {
     if (activeLayers.power_outages) loadOnce('power_outages');
     if (activeLayers.kab_threats) loadOnce('kab_threats');
     if (activeLayers.air_raids) loadOnce('weapon_threats'); // enriches air-raid popups
-    if (activeLayers.drone_threats) loadOnce('drone_threats');
+    if (activeLayers.drone_threats || activeLayers.alarm_vectors) loadOnce('drone_threats');
     if (activeLayers.missile_threats) loadOnce('missile_threats');
     if (activeLayers.ru_air_raids) loadOnce('ru_air_raids');
     if (activeLayers.frontlines) loadOnce('frontlines');
@@ -687,7 +692,7 @@ export default function Dashboard() {
     if (activeLayers.kab_threats) {
       intervals.push(setInterval(() => fetchEndpoint('/api/kab-threats', d => ({ kab_threats: d.threats })).then(() => setLayerTimestamps(p => ({ ...p, kab_threats: Date.now() }))), 60000)); // 1 min
     }
-    if (activeLayers.drone_threats) {
+    if (activeLayers.drone_threats || activeLayers.alarm_vectors) {
       intervals.push(setInterval(() => fetchEndpoint('/api/drone-threats', d => ({ drone_threats: d.threats, drone_waves: d.waves, drone_uav_count: d.uav_count ?? 0, alarm_vectors: d.alarm_vectors ?? [] })).then(() => setLayerTimestamps(p => ({ ...p, drone_threats: Date.now() }))), 60000)); // 1 min — "last 1.5h" data
     }
     if (activeLayers.missile_threats) {

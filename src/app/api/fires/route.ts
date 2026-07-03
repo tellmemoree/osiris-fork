@@ -95,6 +95,12 @@ export async function GET() {
     });
   } catch (error) {
     console.error('Fire fetch error:', error);
+    // Serve the last good cache on a failed refresh rather than an empty 500.
+    if (cache) {
+      return NextResponse.json({ ...cache, total: cache.fires.length }, {
+        headers: { 'Cache-Control': 'public, s-maxage=60, stale-while-revalidate=120', 'X-Stale': 'true' },
+      });
+    }
     return NextResponse.json({ fires: [], error: 'Failed to fetch fire data' }, { status: 500 });
   }
 }

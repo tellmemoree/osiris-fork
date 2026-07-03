@@ -29,7 +29,7 @@ export default function ThreatHUD({ uavCount }: ThreatHUDProps) {
       <span style={{ color: '#E8E6E0', fontSize: '20px', fontWeight: 700, lineHeight: 1 }}>
         {uavCount}
       </span>
-      <span style={{ color: '#5C5A54', fontSize: '9px' }}>ACTIVE</span>
+      <span style={{ color: '#5C5A54', fontSize: '9px' }}>REPORTED</span>
     </div>
   );
 }

@@ -294,21 +294,23 @@ export function clusterEvents(raw: ConflictEvent[]): ConflictEvent[] {
   };
 
   // Step 2: within each spatial cell, sort by time then split on gaps > 2h.
+  // Use ONE "now" fallback for undated events: calling Date.now() per comparison
+  // made the sort comparator inconsistent (it could report a<b and b<a as the
+  // clock advanced — an invalid total order) and shifted cluster boundaries
+  // between iterations. A single value keeps the sort and gap-split deterministic.
+  const nowFallback = Date.now();
+  const tsOf = (e: ConflictEvent): number => (e.published ? new Date(e.published).getTime() : nowFallback);
   for (const [spatialKey, group] of spatialGroups) {
-    group.sort((a, b) => {
-      const ta = a.published ? new Date(a.published).getTime() : Date.now();
-      const tb = b.published ? new Date(b.published).getTime() : Date.now();
-      return ta - tb;
-    });
+    group.sort((a, b) => tsOf(a) - tsOf(b));
 
     let currentCluster: ConflictEvent[] = [];
     for (const ev of group) {
-      const ts = ev.published ? new Date(ev.published).getTime() : Date.now();
+      const ts = tsOf(ev);
       if (currentCluster.length === 0) {
         currentCluster.push(ev);
       } else {
         const lastEv = currentCluster[currentCluster.length - 1];
-        const lastTs = lastEv.published ? new Date(lastEv.published).getTime() : Date.now();
+        const lastTs = tsOf(lastEv);
         if (ts - lastTs > TWO_HOURS) {
           mergeCluster(spatialKey, currentCluster);
           currentCluster = [ev];

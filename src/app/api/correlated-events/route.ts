@@ -160,7 +160,9 @@ interface OblastAccumulator {
 // ---------------------------------------------------------------------------
 
 async function computeCorrelatedEvents(): Promise<CorrelatedEventsResponse> {
-  const base = process.env.OSIRIS_SELF_ORIGIN ?? 'http://localhost:3001';
+  // Default must match the live deploy (Next listens on :3000); the other
+  // self-fetch routes (markets, oblast-pressure) use the same default.
+  const base = process.env.OSIRIS_SELF_ORIGIN ?? 'http://127.0.0.1:3000';
 
   const [airRes, weaponRes, kabRes, droneRes, missileRes] = await Promise.allSettled([
     fetch(`${base}/api/air-raids`,      { signal: AbortSignal.timeout(8000) }).then(r => r.ok ? r.json() as Promise<AirRaidsData> : null),
@@ -208,12 +210,18 @@ async function computeCorrelatedEvents(): Promise<CorrelatedEventsResponse> {
     for (const a of airData.alerts) {
       const oblast = typeof a.oblast === 'string' ? a.oblast : null;
       if (!oblast) continue;
-      const ts = (typeof a.startedAt === 'string' && a.startedAt) ? a.startedAt : responseTs;
+      // The air-raids feed only returns CURRENTLY-ACTIVE alerts, so every entry is
+      // a live signal regardless of when it started — UA alerts routinely run for
+      // hours. Stamp the signal at the response time (the alert is active "now")
+      // rather than the original startedAt: this keeps long-running alerts from
+      // being dropped by the 60-min window (which previously flipped
+      // alarm_confirmed to false mid-alert) without inflating match_tightness_min
+      // with a stale start time.
       const acc = ensureOblast(oblast);
       recordCoords(acc, a.lat, a.lng);
       acc.signals.push({
         type: 'air_raid',
-        ts,
+        ts: responseTs,
       });
     }
   }
@@ -331,16 +339,16 @@ async function computeCorrelatedEvents(): Promise<CorrelatedEventsResponse> {
     const match_tightness_min = Math.round((maxTs - minTs) / 60_000);
     const ts = new Date(maxTs).toISOString();
 
-    // Resolve coords: first signal with finite coords, then centroid, then (0,0)
-    let lat = 0;
-    let lng = 0;
+    // Resolve coords: first signal with finite coords, then centroid.
+    // Skip if neither is available — a (0,0) null-island point is worse than omission.
+    const centroid = OBLAST_CENTROIDS[oblast];
+    let lat: number, lng: number;
     if (acc.coords !== null) {
       [lng, lat] = acc.coords;
+    } else if (centroid) {
+      [lng, lat] = centroid;
     } else {
-      const centroid = OBLAST_CENTROIDS[oblast];
-      if (centroid) {
-        [lng, lat] = centroid;
-      }
+      continue;
     }
 
     events.push({ oblast, lat, lng, signals, alarm_confirmed, match_tightness_min, ts });

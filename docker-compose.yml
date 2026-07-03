@@ -47,11 +47,25 @@ services:
       context: ./intel
       dockerfile: Dockerfile
     container_name: osiris-intel
+    # Bind the published port to loopback only — the Next app reaches intel over
+    # the compose network (osiris-intel:4000), so the host mapping is debug-only
+    # and must not be exposed on 0.0.0.0 (the service has no inbound auth).
     ports:
-      - "4000:4000"
-    env_file:
-      - path: .env
-        required: false
+      - "127.0.0.1:4000:4000"
+    # Pass ONLY the vars intel consumes (interpolated from the host .env) instead
+    # of env_file mounting the ENTIRE secret set (Telegram/webhook/SDK/AIS/Censys…)
+    # into a container that needs none of them.
+    environment:
+      - NODE_ENV=production
+      - INTEL_PORT=${INTEL_PORT:-4000}
+      - INTEL_CACHE_DIR=${INTEL_CACHE_DIR:-/data/intel}
+      - SHODAN_API_KEY=${SHODAN_API_KEY:-}
+      - OPENSANCTIONS_API_KEY=${OPENSANCTIONS_API_KEY:-}
+      - ABUSEIPDB_KEY=${ABUSEIPDB_KEY:-}
+      - GFW_API_KEY=${GFW_API_KEY:-}
+      - FLEETMON_API_USER=${FLEETMON_API_USER:-}
+      - FLEETMON_API_KEY=${FLEETMON_API_KEY:-}
+      - COMPANIES_HOUSE_KEY=${COMPANIES_HOUSE_KEY:-}
     volumes:
       - intel-cache:/data/intel
     restart: unless-stopped

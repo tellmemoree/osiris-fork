@@ -444,8 +444,8 @@ export async function extractGeoEvents(): Promise<{
 /**
  * Computes a dedup fingerprint for a Telegram message.
  * Normalises whitespace, lower-cases, and truncates to 120 chars before
- * bucketing into 10-minute epochs — so reposts of the same alert within the
- * same 10-min window (across different channels) collapse to a single entry.
+ * bucketing into 30-minute epochs — so reposts of the same alert within the
+ * same 30-min window (across different channels) collapse to a single entry.
  */
 export function msgFingerprint(text: string, ts: number): string {
   const normalised = text.toLowerCase().replace(/\s+/g, ' ').trim().slice(0, 120);
@@ -536,7 +536,7 @@ export function buildRoute(messages: TgMessage[], weaponType: WeaponType): Route
     .filter(msg => {
       if (!classifyWeapons(msg.text).includes(weaponType)) return false;
       if (isAnalysis(msg.text)) return false;
-      // Dedup reposts: same normalised text in the same 10-min bucket → skip
+      // Dedup reposts: same normalised text in the same 30-min bucket → skip
       const fp = msgFingerprint(msg.text, msg.ts);
       if (seenFingerprints.has(fp)) return false;
       seenFingerprints.add(fp);

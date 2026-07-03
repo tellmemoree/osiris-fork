@@ -264,13 +264,15 @@ async function buildEvents(): Promise<RuAirRaidsResponse> {
           agg.set(ref.oblast, entry);
         }
 
-        // Alert first, then clear — a message can satisfy both.
-        if (alert && msg.ts > entry.latestAlertTs) {
+        // Clear wins if present in the same message — a message matching both
+        // patterns (e.g. "тревога отменена") is unambiguously an all-clear even
+        // though it contains the alert stem "тревог".
+        if (alert && !clear && msg.ts > entry.latestAlertTs) {
           entry.latestAlertTs = msg.ts;
           entry.latestAlertText = msg.text;
           entry.latestAlertSource = `t.me/${c}`;
           entry.alertChannels.add(c);
-        } else if (alert) {
+        } else if (alert && !clear) {
           // Still counts as a channel that posted an alert, even if not latest.
           entry.alertChannels.add(c);
         }

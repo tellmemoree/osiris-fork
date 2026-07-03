@@ -681,6 +681,26 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
           'text-halo-width': 1,
         },
       });
+      map.addLayer({
+        id: 'alarm-vector-label',
+        type: 'symbol',
+        source: 'alarm-vectors',
+        filter: ['==', ['geometry-type'], 'LineString'],
+        minzoom: 5,
+        layout: {
+          'symbol-placement': 'line',
+          'text-field': ['get', 'label'],
+          'text-size': 8,
+          'text-font': ['Open Sans Regular', 'Arial Unicode MS Regular'],
+          'text-allow-overlap': false,
+        },
+        paint: {
+          'text-color': '#FF9800',
+          'text-opacity': 0.6,
+          'text-halo-color': '#000000',
+          'text-halo-width': 1,
+        },
+      });
 
       // RU Oblast Alerts — red (Russian border oblast drone/strike incursions).
       // Note: 'ru-air-raids' is NOT in the sources array above — registered explicitly here.
@@ -2390,10 +2410,18 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
   useEffect(() => {
     if (!mapReady) return;
     const cutoff = replayTime ?? new Date();
+    const cutoffMs = cutoff.getTime();
     const allThreats = activeLayers.kab_threats && data.kab_threats ? data.kab_threats : [];
-    const threats = allThreats.filter((t: any) =>
-      t.lat && t.lng && (!t.startedAt || new Date(t.startedAt).getTime() <= cutoff.getTime())
-    );
+    const threats = allThreats.filter((t: any) => {
+      if (!t.lat || !t.lng) return false;
+      if (t.startedAt) {
+        const ts = new Date(t.startedAt).getTime();
+        if (ts > cutoffMs) return false;
+        // Skip the 24h lower-bound during replay, matching the other timeline layers.
+        if (!replayTime && (cutoffMs - ts) >= 86400000) return false;
+      }
+      return true;
+    });
     setGeo('kab-threats', threats.map((t: any) => ({
       type: 'Feature', geometry: { type: 'Point', coordinates: [t.lng, t.lat] },
       properties: {
@@ -2652,7 +2680,7 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
     setVis(['kab-glow','kab-dots','kab-label'], activeLayers.kab_threats);
     setVis(['drone-route-line','drone-route-arrows','drone-route-nodes','drone-route-label'], activeLayers.drone_threats);
     setVis(['missile-route-line','missile-route-arrows','missile-route-nodes','missile-route-label'], activeLayers.missile_threats);
-    setVis(['alarm-vector-line','alarm-vector-arrow'], activeLayers.alarm_vectors);
+    setVis(['alarm-vector-line','alarm-vector-arrow','alarm-vector-label'], activeLayers.alarm_vectors);
     setVis(['ru-raid-glow','ru-raid-dots','ru-raid-label'], activeLayers.ru_air_raids);
     setVis(['thermal-aoi-glow','thermal-aoi-dots','thermal-aoi-label','thermal-aoi-unconfirmed-label'], activeLayers.thermal_aoi);
     setVis(['capture-glow','capture-dots'], activeLayers.captures);

@@ -162,9 +162,14 @@ function EntityGraphPanel({ entity, onClose }: Props) {
     return { nodes: Array.from(nodeMap.values()), links: merged };
   }, []);
 
+  // Aborts in-flight expansions when the selected entity changes, so a slow
+  // response for a previous entity can't merge its nodes into the new graph.
+  const expandAbortRef = useRef<AbortController | null>(null);
+
   const expandEntity = useCallback(async (type: string, id: string, properties?: Record<string, any>) => {
     const key = `${type}:${id}`;
     if (expandedIds.has(key)) return;
+    const signal = expandAbortRef.current?.signal;
     setLoading(true); setError(null);
     try {
       const params = new URLSearchParams({ type, id });
@@ -174,13 +179,17 @@ function EntityGraphPanel({ entity, onClose }: Props) {
         const val = properties?.[key];
         if (val != null && val !== '') params.set(key, String(val));
       }
-      const res = await fetch(`/api/entity/expand?${params}`, { cache: 'no-store' });
+      const res = await fetch(`/api/entity/expand?${params}`, { cache: 'no-store', signal });
       if (!res.ok) { const b = await res.json().catch(() => ({})); throw new Error(b.error || `HTTP ${res.status}`); }
       const data = await res.json();
+      if (signal?.aborted) return; // entity changed mid-flight — drop the stale result
       setGraphData(prev => mergeGraph(prev, { nodes: data.nodes || [], links: data.links || [] }));
       setExpandedIds(prev => new Set([...prev, key]));
-    } catch (e) { setError(e instanceof Error ? e.message : 'Expansion failed'); }
-    finally { setLoading(false); }
+    } catch (e) {
+      if ((e as { name?: string })?.name === 'AbortError') return; // superseded, not an error
+      setError(e instanceof Error ? e.message : 'Expansion failed');
+    }
+    finally { if (!signal?.aborted) setLoading(false); }
   }, [expandedIds, mergeGraph]);
 
   // Measure container on mount and observe size changes
@@ -207,6 +216,9 @@ function EntityGraphPanel({ entity, onClose }: Props) {
 
   useEffect(() => {
     if (!entity) return;
+    // Cancel any expansions still in flight for the previous entity.
+    expandAbortRef.current?.abort();
+    expandAbortRef.current = new AbortController();
     const root: EntityNode = {
       id: `${entity.type}:${entity.id}`, label: entity.label || entity.id,
       type: entity.type as EntityNode['type'], properties: entity.properties,
@@ -216,6 +228,7 @@ function EntityGraphPanel({ entity, onClose }: Props) {
     setSelectedNode(root);
     setError(null);
     expandEntity(entity.type, entity.id, entity.properties);
+    return () => expandAbortRef.current?.abort();
   }, [entity]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleNodeClick = useCallback((node: any) => {

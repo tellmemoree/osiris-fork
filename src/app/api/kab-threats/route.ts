@@ -325,6 +325,10 @@ export async function GET() {
         window_hours: WINDOW_HOURS,
         timestamp:    new Date().toISOString(),
       };
+      // Stamp cachedAt so the disk-seeded data is actually served via the fast
+      // path on cold start (the point of #110); without this it stays 0 and the
+      // fast path is never taken, so every request recomputes.
+      cachedAt = now;
     }
   }
 

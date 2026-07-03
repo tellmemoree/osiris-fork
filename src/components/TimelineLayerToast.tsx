@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { X } from 'lucide-react';
 
@@ -21,10 +21,15 @@ interface Props {
 const AUTO_DISMISS_MS = 8000;
 
 function Toast({ item, onDismiss }: { item: TimelineLayerToastItem; onDismiss: () => void }) {
+  // Arm the auto-dismiss once on mount. `onDismiss` is recreated inline by the
+  // parent every render; depending on it here would reset the timer each render
+  // and the toast would never auto-close. Call the latest one via a ref.
+  const dismissRef = useRef(onDismiss);
+  dismissRef.current = onDismiss;
   useEffect(() => {
-    const timer = setTimeout(() => onDismiss(), AUTO_DISMISS_MS);
+    const timer = setTimeout(() => dismissRef.current(), AUTO_DISMISS_MS);
     return () => clearTimeout(timer);
-  }, [onDismiss]);
+  }, []);
 
   return (
     <motion.div
