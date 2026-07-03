@@ -2131,6 +2131,7 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
     setVis(['thermal-aoi-glow','thermal-aoi-dots','thermal-aoi-label','thermal-aoi-unconfirmed-label'], activeLayers.thermal_aoi);
     setVis(['capture-glow','capture-dots'], activeLayers.captures);
     setVis(['frontline-fill','frontline-line'], activeLayers.frontlines);
+    setVis(['aq-glow','aq-dots','aq-label'], activeLayers.air_quality);
   }, [mapReady, activeLayers, setVis]);
 
   // IP Sweep visualization
