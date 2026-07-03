@@ -34,13 +34,25 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 
-# Scanner backend (API key in env, not in git)
+# Scanner backend
 scanner/
-.vercel
+
+# Data files
+threatfox.json
+
+# Dev scripts (one-time migration helpers)
+scripts/
+
+# AI agent config files
+CLAUDE.md
+AGENTS.md
+
+# Internal dev notes
+DO_NOT_PUSH.md
+implementation_plan.md
 
 # Security - prevent accidental backup commits
 scanner_backend_backup.js
 
 # Security - Prevent accidental manual leaks
 *Manual*.md
-

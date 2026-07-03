@@ -15,7 +15,7 @@ export default function CameraViewer({ camera, onClose, onLocate }: CameraViewer
   const [imageUrl, setImageUrl] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
-  const [refreshKey, setRefreshKey] = useState(0);
+  const [retryCount, setRetryCount] = useState(0);
   const [fullscreen, setFullscreen] = useState(false);
   const [currentTime, setCurrentTime] = useState<string>('');
 
@@ -77,27 +77,39 @@ export default function CameraViewer({ camera, onClose, onLocate }: CameraViewer
       return;
     }
 
+    if (streamType === 'mjpeg' && camera.stream_url) {
+      setLoading(false);
+      return;
+    }
+
     if ((streamType === 'iframe' || streamType === 'mp4') && camera.stream_url) {
       setLoading(false);
       return;
     }
 
     // JPG fallback
-    if (camera.feed_url) {
-      const url = camera.feed_url.includes('?') ? `${camera.feed_url}&_t=${Date.now()}` : `${camera.feed_url}?_t=${Date.now()}`;
+    const targetUrl = camera.feed_url || camera.stream_url;
+    if (targetUrl) {
+      const url = targetUrl.includes('?') ? `${targetUrl}&_t=${Date.now()}` : `${targetUrl}?_t=${Date.now()}`;
       setImageUrl(url);
     } else {
       setError(true);
       setLoading(false);
     }
-  }, [camera, refreshKey, streamType, externalOnly]);
+  }, [camera, streamType, externalOnly, retryCount]);
 
   // Auto-refresh for JPGs
   useEffect(() => {
-    if (streamType !== 'jpg' || !camera?.feed_url) return;
-    const iv = setInterval(() => setRefreshKey(k => k + 1), 5000); // 5s refresh for JPG
+    if (streamType !== 'jpg' || (!camera?.feed_url && !camera?.stream_url)) return;
+    const targetUrl = camera.feed_url || camera.stream_url;
+    if (!targetUrl) return;
+
+    const iv = setInterval(() => {
+      const url = targetUrl.includes('?') ? `${targetUrl}&_t=${Date.now()}` : `${targetUrl}?_t=${Date.now()}`;
+      setImageUrl(url);
+    }, 5000); // 5s refresh for JPG
     return () => clearInterval(iv);
-  }, [camera?.feed_url, streamType]);
+  }, [camera, streamType]);
 
   if (!camera) return null;
 
@@ -153,7 +165,16 @@ export default function CameraViewer({ camera, onClose, onLocate }: CameraViewer
                 {/* Controls */}
                 <div className="flex items-center gap-1 flex-shrink-0 ml-3">
                   {streamType === 'jpg' && (
-                    <button onClick={() => setRefreshKey(k => k + 1)} className="p-1.5 rounded-sm bg-white/5 border border-white/10 hover:bg-[var(--gold-primary)]/20 hover:border-[var(--gold-primary)] transition-all" title="Refresh feed">
+                    <button 
+                      onClick={() => {
+                        const targetUrl = camera.feed_url || camera.stream_url;
+                        if (targetUrl) {
+                          const url = targetUrl.includes('?') ? `${targetUrl}&_t=${Date.now()}` : `${targetUrl}?_t=${Date.now()}`;
+                          setImageUrl(url);
+                        }
+                      }} 
+                      className="p-1.5 rounded-sm bg-white/5 border border-white/10 hover:bg-[var(--gold-primary)]/20 hover:border-[var(--gold-primary)] transition-all" title="Refresh feed"
+                    >
                       <RefreshCw className="w-3 h-3 text-[var(--text-secondary)] hover:text-[var(--gold-primary)]" />
                     </button>
                   )}
@@ -211,7 +232,7 @@ export default function CameraViewer({ camera, onClose, onLocate }: CameraViewer
                   <div className="w-8 h-8 rounded-full bg-red-500/20 flex items-center justify-center mb-2 mx-auto"><Camera className="w-4 h-4 text-red-400" /></div>
                   <span className="text-[9px] font-mono text-red-400 tracking-widest block mb-1">FEED UNAVAILABLE</span>
                   <span className="text-[7px] font-mono text-[var(--text-muted)]">Camera may be offline or restricted</span>
-                  <button onClick={() => { setError(false); setRefreshKey(k => k + 1); }} className="block mx-auto mt-3 px-3 py-1 text-[8px] font-mono text-[#7E57C2] border border-[#7E57C2]/30 rounded hover:bg-[#7E57C2]/10 transition-colors tracking-wider">
+                  <button onClick={() => { setError(false); setRetryCount(c => c + 1); }} className="block mx-auto mt-3 px-3 py-1 text-[8px] font-mono text-[#7E57C2] border border-[#7E57C2]/30 rounded hover:bg-[#7E57C2]/10 transition-colors tracking-wider">
                     RETRY
                   </button>
                 </div>
@@ -223,6 +244,14 @@ export default function CameraViewer({ camera, onClose, onLocate }: CameraViewer
                 autoPlay
                 muted
                 playsInline
+              />
+            ) : streamType === 'mjpeg' && camera.stream_url ? (
+              <img
+                src={camera.stream_url}
+                alt={camera.name}
+                className={`w-full h-full ${fullscreen ? 'object-contain' : 'object-cover'}`}
+                onLoad={() => setLoading(false)}
+                onError={() => { setLoading(false); setError(true); }}
               />
             ) : streamType === 'mp4' && camera.stream_url ? (
               <video
@@ -242,7 +271,6 @@ export default function CameraViewer({ camera, onClose, onLocate }: CameraViewer
               />
             ) : imageUrl ? (
               <img
-                key={refreshKey}
                 src={imageUrl}
                 alt={camera.name}
                 className={`w-full h-full ${fullscreen ? 'object-contain' : 'object-cover'}`}

@@ -5,7 +5,6 @@ services:
     # block is kept as a fallback: `docker compose up -d` uses the registry
     # image if present/pullable, otherwise builds locally from the Dockerfile.
     # Run `docker compose pull` to fetch the latest published image.
-    image: ghcr.io/aiacos/osiris:latest
     build:
       context: .
       dockerfile: Dockerfile

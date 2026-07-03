@@ -15,13 +15,15 @@ import ViewPresets from '@/components/ViewPresets';
 import KeyboardShortcuts from '@/components/KeyboardShortcuts';
 import GlobalStatusBar from '@/components/GlobalStatusBar';
 import LiveAlerts from '@/components/LiveAlerts';
+import CommandPalette, { type PaletteCommand } from '@/components/CommandPalette';
+import ThreatFusionHUD from '@/components/ThreatFusionHUD';
 
 const OsirisMap = dynamic(() => import('@/components/OsirisMap'), { ssr: false });
 const LayerPanel = dynamic(() => import('@/components/LayerPanel'));
 const CameraViewer = dynamic(() => import('@/components/CameraViewer'));
 const OsintPanel = dynamic(() => import('@/components/OsintPanel'));
 const EntityGraphPanel = dynamic(() => import('@/components/EntityGraphPanel'));
-
+const TokenPanel = dynamic(() => import('@/components/TokenPanel'));
 function useIsMobile() {
   const [isMobile, setIsMobile] = useState(false);
   useEffect(() => {
@@ -90,7 +92,7 @@ export default function Dashboard() {
 
   const [backendStatus, setBackendStatus] = useState<'connecting' | 'connected' | 'error'>('connecting');
   const [mapView, setMapView] = useState({ zoom: 2.5, latitude: 20 });
-  const [flyToLocation, setFlyToLocation] = useState<{ lat: number; lng: number; ts: number } | null>(null);
+  const [flyToLocation, setFlyToLocation] = useState<{ lat: number; lng: number; zoom?: number; ts: number } | null>(null);
   const [globalStats, setGlobalStats] = useState<any>(null);
   const mouseCoordsRef = useRef<{ lat: number; lng: number } | null>(null);
   const coordsDisplayRef = useRef<HTMLDivElement>(null);
@@ -106,6 +108,8 @@ export default function Dashboard() {
   const [showScmPanel, setShowScmPanel] = useState(true);
   const [showIntel, setShowIntel] = useState(false);
   const [showEntityGraph, setShowEntityGraph] = useState(false);
+  const [showDesktopSearch, setShowDesktopSearch] = useState(false);
+  const [showFusion, setShowFusion] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [mobilePanel, setMobilePanel] = useState<'layers'|'markets'|'intel'|'search'|'recon'|null>(null);
   const [mapProjection, setMapProjection] = useState<'globe'|'mercator'>('globe');
@@ -134,6 +138,11 @@ export default function Dashboard() {
     military: false,
     maritime: true,
     satellites: false,
+    sat_comms: false,
+    sat_military: false,
+    sat_navigation: false,
+    sat_earth: false,
+    sat_science: false,
     balloons: false,
     cctv: true,
     live_news: true,
@@ -151,7 +160,7 @@ export default function Dashboard() {
     sdk_sea: true,
     sdk_air: true,
     sdk_naval: true,
-    
+    terrain_3d: false,
     malware: false,
   });
   const [liveFeedUrl, setLiveFeedUrl] = useState<string | null>(null);
@@ -182,7 +191,7 @@ export default function Dashboard() {
 
     // Delay geolocation until map is ready (after splash screen clears)
     const geoTimer = setTimeout(() => {
-      fetch('http://ip-api.com/json/?fields=status,lat,lon,city,regionName,country,query,isp,org,as')
+      fetch('/api/geo')
         .then(r => r.json())
         .then(geo => {
           if (geo.status === 'success' && geo.lat && geo.lon) {
@@ -230,8 +239,13 @@ export default function Dashboard() {
       if (e.key === 'm') setShowMarkets(p => !p);
       if (e.key === 'c') setShowScmPanel(p => !p);
       if (e.key === 'i') setShowIntel(p => !p);
+      if (e.key === 's') { setShowDesktopSearch(p => !p); setShowIntel(false); setShowMarkets(false); setShowAlerts(false); }
       if (e.key === 'r') setFlyToLocation({ lat: 20, lng: 0, ts: Date.now() });
       if (e.key === 'g') setMapProjection(p => p === 'globe' ? 'mercator' : 'globe');
+      if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
+        e.preventDefault();
+        setShowDesktopSearch(true); setShowIntel(false); setShowMarkets(false); setShowAlerts(false);
+      }
     };
     const fsHandler = () => setIsFullscreen(!!document.fullscreenElement);
     window.addEventListener('keydown', handler);
@@ -328,7 +342,9 @@ export default function Dashboard() {
   // ── PROGRESSIVE DATA LOADING (request-optimized) ──
   useEffect(() => {
     // Priority 1: Core feeds (always needed for panels)
-    fetchEndpoint('/api/earthquakes');
+    const eqUrl = 'https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/2.5_day.geojson';
+    const eqTransform = (data: any) => ({ earthquakes: (data.features || []).map((f: any) => ({ id: f.id, lat: f.geometry?.coordinates?.[1] || 0, lng: f.geometry?.coordinates?.[0] || 0, depth: f.geometry?.coordinates?.[2] || 0, magnitude: f.properties?.mag, place: f.properties?.place, time: f.properties?.time, url: f.properties?.url, tsunami: f.properties?.tsunami, type: f.properties?.type, felt: f.properties?.felt, alert: f.properties?.alert })) });
+    fetchEndpoint(eqUrl, eqTransform);
     fetchEndpoint('/api/news');
     const marketTimer = setTimeout(() => fetchEndpoint('/api/markets', d => ({ markets: d })), 800);
 
@@ -342,7 +358,7 @@ export default function Dashboard() {
 
     // Polling — OPTIMIZED intervals to minimize edge requests
     const intervals = [
-      setInterval(() => fetchEndpoint('/api/earthquakes'), 900000),  // 15 min (was 5)
+      setInterval(() => fetchEndpoint(eqUrl, eqTransform), 900000),  // 15 min (was 5)
       setInterval(() => fetchEndpoint('/api/news'), 1800000),        // 30 min (was 10)
       setInterval(() => fetchEndpoint('/api/markets', d => ({ markets: d })), 900000), // 15 min (was 5)
     ];
@@ -364,8 +380,9 @@ export default function Dashboard() {
         layerFetchedRef.current.add('flights');
       }
     }
-    // Satellites
-    if (activeLayers.satellites && !layerFetchedRef.current.has('satellites')) {
+    // Satellites (any satellite sub-layer triggers fetch)
+    const anySatLayer = activeLayers.satellites || activeLayers.sat_comms || activeLayers.sat_military || activeLayers.sat_navigation || activeLayers.sat_earth || activeLayers.sat_science;
+    if (anySatLayer && !layerFetchedRef.current.has('satellites')) {
       fetchEndpoint('/api/satellites');
       layerFetchedRef.current.add('satellites');
     }
@@ -376,7 +393,7 @@ export default function Dashboard() {
     }
     // CCTV
     if (activeLayers.cctv && !layerFetchedRef.current.has('cctv')) {
-      fetchEndpoint('/api/cctv?region=all&v=2');
+      fetchEndpoint(`/api/cctv?region=all&_t=${Date.now()}`);
       layerFetchedRef.current.add('cctv');
     }
     // Maritime
@@ -431,11 +448,7 @@ export default function Dashboard() {
       layerFetchedRef.current.add('cables');
     }
 
-    // Internet Outages (IODA)
-    if (false) {
-      fetchEndpoint('/api/radar', d => ({ ioda_outages: d.outages }));
-      layerFetchedRef.current.add('ioda');
-    }
+
     // Live Malware (abuse.ch)
     if (activeLayers.malware && !layerFetchedRef.current.has('malware')) {
       fetchEndpoint('/api/malware', d => ({ malware_threats: d.threats }));
@@ -550,6 +563,130 @@ export default function Dashboard() {
   const totalFlights = useMemo(() => (
     (data.commercial_flights?.length||0)+(data.private_flights?.length||0)+(data.private_jets?.length||0)+(data.military_flights?.length||0)
   ), [data.commercial_flights, data.private_flights, data.private_jets, data.military_flights]);
+
+  // ── COMMAND PALETTE (⌘K) — unified launcher for layers, navigation, panels & display ──
+  const flyTo = useCallback((lat: number, lng: number, zoom: number) => {
+    setFlyToLocation({ lat, lng, ts: Date.now() });
+    setMapView(v => ({ ...v, zoom }));
+  }, []);
+  const closeRightPanels = useCallback(() => {
+    setShowIntel(false); setShowMarkets(false); setShowAlerts(false); setShowEntityGraph(false); setShowDesktopSearch(false); setShowFusion(false);
+  }, []);
+  const toggleFullscreen = useCallback(() => {
+    if (typeof document === 'undefined') return;
+    if (document.fullscreenElement) document.exitFullscreen();
+    else document.documentElement.requestFullscreen().catch(() => {});
+  }, []);
+
+  const paletteCommands = useMemo<PaletteCommand[]>(() => {
+    const LAYER_DEFS: { key: keyof typeof activeLayers; label: string; hint: string }[] = [
+      { key: 'flights', label: 'Commercial Flights', hint: 'ADS-B / OpenSky' },
+      { key: 'private', label: 'Private Aircraft', hint: 'ADS-B' },
+      { key: 'jets', label: 'Private Jets', hint: 'ADS-B' },
+      { key: 'military', label: 'Military Aircraft', hint: 'ADS-B' },
+      { key: 'maritime', label: 'Maritime / Naval', hint: 'Ports · Chokepoints · Ships' },
+      { key: 'satellites', label: 'Satellites', hint: 'Orbital tracking' },
+      { key: 'sat_military', label: 'Military Satellites', hint: 'Intel constellations' },
+      { key: 'balloons', label: 'High-Altitude Balloons', hint: 'Stratospheric' },
+      { key: 'cctv', label: 'CCTV Cameras', hint: 'Public traffic cams' },
+      { key: 'live_news', label: 'Live News Feeds', hint: '24/7 broadcasters' },
+      { key: 'news_intel', label: 'SIGINT News', hint: 'Geoparsed RSS' },
+      { key: 'earthquakes', label: 'Earthquakes', hint: 'USGS M2.5+' },
+      { key: 'fires', label: 'Active Fires', hint: 'NASA FIRMS' },
+      { key: 'weather', label: 'Severe Weather', hint: 'EONET + NWS + GDACS' },
+      { key: 'radiation', label: 'Radiation Monitors', hint: 'Geiger network' },
+      { key: 'infrastructure', label: 'Nuclear Facilities', hint: 'Critical infra' },
+      { key: 'global_incidents', label: 'Global Incidents', hint: 'GDELT events' },
+      { key: 'gps_jamming', label: 'GPS Jamming', hint: 'Interference zones' },
+      { key: 'malware', label: 'Live Malware', hint: 'abuse.ch threat feed' },
+      { key: 'cables', label: 'Submarine Cables', hint: 'Undersea backbone' },
+      { key: 'day_night', label: 'Day / Night Terminator', hint: 'Solar overlay' },
+      { key: 'terrain_3d', label: '3D Terrain & Buildings', hint: 'Elevation mesh' },
+    ];
+    const layerCount = (k: string): string => {
+      const map: Record<string, string> = {
+        flights: 'commercial_flights', private: 'private_flights', jets: 'private_jets', military: 'military_flights',
+        maritime: 'maritime_ships', satellites: 'satellites', earthquakes: 'earthquakes', fires: 'fires',
+        cctv: 'cameras', live_news: 'live_feeds', global_incidents: 'gdelt', malware: 'malware_threats',
+      };
+      const dk = map[k];
+      const arr = dk ? (data as Record<string, unknown>)[dk] : undefined;
+      return Array.isArray(arr) && arr.length ? String(arr.length) : '';
+    };
+
+    const NAV: { label: string; hint: string; lat: number; lng: number; zoom: number }[] = [
+      { label: 'Global View', hint: 'Whole earth', lat: 20, lng: 0, zoom: 2.5 },
+      { label: 'Ukraine', hint: 'Active conflict', lat: 49, lng: 32, zoom: 6 },
+      { label: 'Middle East', hint: 'Regional theatre', lat: 30, lng: 45, zoom: 4.5 },
+      { label: 'Gaza / Israel', hint: 'Conflict zone', lat: 31.5, lng: 34.7, zoom: 8 },
+      { label: 'Taiwan Strait', hint: 'Flashpoint', lat: 24.5, lng: 120, zoom: 6.5 },
+      { label: 'South China Sea', hint: 'Disputed waters', lat: 14, lng: 114, zoom: 5 },
+      { label: 'Strait of Hormuz', hint: 'Oil chokepoint', lat: 26.6, lng: 56.3, zoom: 7.5 },
+      { label: 'Suez Canal', hint: 'Maritime chokepoint', lat: 30.5, lng: 32.35, zoom: 8 },
+      { label: 'Panama Canal', hint: 'Maritime chokepoint', lat: 9.1, lng: -79.7, zoom: 8 },
+      { label: 'Bab-el-Mandeb', hint: 'Red Sea gate', lat: 12.6, lng: 43.3, zoom: 7.5 },
+      { label: 'Washington DC', hint: 'Capital', lat: 38.9, lng: -77.04, zoom: 9 },
+      { label: 'Moscow', hint: 'Capital', lat: 55.75, lng: 37.62, zoom: 9 },
+      { label: 'Beijing', hint: 'Capital', lat: 39.9, lng: 116.4, zoom: 9 },
+      { label: 'London', hint: 'Capital', lat: 51.5, lng: -0.12, zoom: 9 },
+      { label: 'Kyiv', hint: 'Capital', lat: 50.45, lng: 30.52, zoom: 9 },
+      { label: 'Tehran', hint: 'Capital', lat: 35.7, lng: 51.4, zoom: 9 },
+      { label: 'Pyongyang', hint: 'Capital', lat: 39.04, lng: 125.76, zoom: 9 },
+    ];
+
+    const cmds: PaletteCommand[] = [];
+
+    // Layers
+    for (const l of LAYER_DEFS) {
+      const on = !!activeLayers[l.key];
+      const cnt = on ? layerCount(l.key as string) : '';
+      cmds.push({
+        id: `layer:${String(l.key)}`,
+        group: 'LAYERS',
+        title: `${on ? 'Hide' : 'Show'} ${l.label}`,
+        subtitle: l.hint,
+        keywords: `layer toggle ${l.label} ${l.hint}`,
+        icon: <Layers className="w-4 h-4" />,
+        badge: on ? (cnt || 'ON') : 'OFF',
+        active: on,
+        keepOpen: true,
+        run: () => setActiveLayers(prev => ({ ...prev, [l.key]: !prev[l.key] })),
+      });
+    }
+
+    // Navigation
+    for (const n of NAV) {
+      cmds.push({
+        id: `nav:${n.label}`,
+        group: 'NAVIGATE',
+        title: `Fly to ${n.label}`,
+        subtitle: n.hint,
+        keywords: `go navigate location ${n.label} ${n.hint}`,
+        icon: <Crosshair className="w-4 h-4" />,
+        run: () => flyTo(n.lat, n.lng, n.zoom),
+      });
+    }
+
+    // Panels & tools
+    cmds.push(
+      { id: 'panel:recon', group: 'TOOLS', title: 'Open RECON / OSINT Toolkit', subtitle: 'Scanner · WHOIS · DNS · Crypto · Sanctions', keywords: 'recon osint scanner whois dns vuln crypto sanctions', icon: <Radar className="w-4 h-4" />, run: () => { closeRightPanels(); setShowIntel(true); } },
+      { id: 'panel:markets', group: 'TOOLS', title: 'Open Markets & Intel', subtitle: 'Indices · commodities · space weather', keywords: 'markets stocks commodities finance', icon: <BarChart3 className="w-4 h-4" />, run: () => { closeRightPanels(); setShowMarkets(true); } },
+      { id: 'panel:alerts', group: 'TOOLS', title: 'Open Live Alerts', subtitle: 'Real-time event stream', keywords: 'alerts warnings events', icon: <AlertTriangle className="w-4 h-4" />, run: () => { closeRightPanels(); setShowAlerts(true); } },
+      { id: 'panel:graph', group: 'TOOLS', title: 'Open Entity Graph', subtitle: 'Link analysis & fusion', keywords: 'entity graph network link analysis', icon: <Network className="w-4 h-4" />, run: () => { closeRightPanels(); setShowEntityGraph(true); } },
+      { id: 'panel:search', group: 'TOOLS', title: 'Open Search', subtitle: 'Find places & entities', keywords: 'search find place', icon: <Search className="w-4 h-4" />, run: () => { closeRightPanels(); setShowDesktopSearch(true); } },
+      { id: 'panel:layers', group: 'TOOLS', title: 'Toggle Layer Sidebar', subtitle: 'Show / hide layer rail', keywords: 'layers panel sidebar', icon: <Layers className="w-4 h-4" />, keepOpen: true, run: () => setShowLayers(p => !p) },
+    );
+
+    // Display
+    cmds.push(
+      { id: 'disp:proj', group: 'DISPLAY', title: mapProjection === 'globe' ? 'Switch to 2D Map' : 'Switch to 3D Globe', subtitle: 'Map projection', keywords: 'globe mercator 2d 3d projection', icon: <Globe className="w-4 h-4" />, badge: mapProjection === 'globe' ? 'GLOBE' : 'FLAT', active: mapProjection === 'globe', keepOpen: true, run: () => setMapProjection(p => p === 'globe' ? 'mercator' : 'globe') },
+      { id: 'disp:style', group: 'DISPLAY', title: mapStyle === 'dark' ? 'Satellite Imagery' : 'Night / Dark Basemap', subtitle: 'Basemap style', keywords: 'satellite imagery dark night basemap style', icon: <Satellite className="w-4 h-4" />, badge: mapStyle === 'satellite' ? 'SAT' : 'DARK', active: mapStyle === 'satellite', keepOpen: true, run: () => setMapStyle(s => s === 'dark' ? 'satellite' : 'dark') },
+      { id: 'disp:theme', group: 'DISPLAY', title: osirisTheme === 'ghost' ? 'Core Protocol (Gold)' : 'Ghost Protocol (Violet)', subtitle: 'Interface theme', keywords: 'theme ghost core gold violet colour', icon: <Moon className="w-4 h-4" />, badge: osirisTheme === 'ghost' ? 'GHOST' : 'CORE', active: osirisTheme === 'ghost', keepOpen: true, run: () => setOsirisTheme(t => t === 'core' ? 'ghost' : 'core') },
+      { id: 'disp:fs', group: 'DISPLAY', title: 'Toggle Fullscreen', subtitle: 'Immersive mode', keywords: 'fullscreen immersive', icon: <MapPinned className="w-4 h-4" />, run: toggleFullscreen },
+    );
+
+    return cmds;
+  }, [activeLayers, mapProjection, mapStyle, osirisTheme, data, flyTo, closeRightPanels, toggleFullscreen]);
 
 
   return (
@@ -770,57 +907,73 @@ export default function Dashboard() {
       </ErrorBoundary>
 
 
-      {/* ── MAP VIEW CONTROLS (3D/2D + SATELLITE TOGGLE) ── */}
+      {/* ── MAP VIEW CONTROLS (3D/2D + SATELLITE TOGGLE) — unified glass control ── */}
       <motion.div
         initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 3.5 }}
-        className="absolute bottom-[75px] md:bottom-6 left-3 md:left-[315px] z-[200] flex items-center gap-2 pointer-events-none"
+        className="absolute bottom-[75px] md:bottom-[100px] z-[200] flex items-center pointer-events-none"
+        style={{ left: isMobile ? '12px' : '120px' }}
       >
-        {/* 3D/2D Toggle */}
-        <button
-          onClick={() => setMapProjection(p => p === 'globe' ? 'mercator' : 'globe')}
-          className="glass-panel p-3.5 pointer-events-auto hover:border-[var(--gold-primary)]/40 transition-colors group relative"
-          title={mapProjection === 'globe' ? 'Switch to 2D Map' : 'Switch to 3D Globe'}
-        >
-          {mapProjection === 'globe' ? (
-            <MapPinned className="w-5 h-5 text-[var(--gold-primary)] group-hover:scale-110 transition-transform" />
-          ) : (
-            <Globe className="w-5 h-5 text-[var(--cyan-primary)] group-hover:scale-110 transition-transform" />
-          )}
-          <span className="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 text-[9px] font-mono text-[var(--text-muted)] whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity glass-panel px-2 py-1 z-[300]">
-            {mapProjection === 'globe' ? '2D MAP' : '3D GLOBE'}
-          </span>
-        </button>
+        <div className="glass-panel flex items-center gap-1 p-1 pointer-events-auto">
+          {/* 3D/2D Toggle */}
+          <button
+            onClick={() => setMapProjection(p => p === 'globe' ? 'mercator' : 'globe')}
+            className="group relative flex items-center justify-center w-10 h-10 rounded-[10px] transition-colors"
+            style={{
+              background: mapProjection === 'globe' ? 'rgba(0,229,255,0.12)' : 'transparent',
+              boxShadow: mapProjection === 'globe' ? 'inset 0 0 0 1px rgba(0,229,255,0.35)' : 'none',
+            }}
+            title={mapProjection === 'globe' ? 'Switch to 2D Map' : 'Switch to 3D Globe'}
+          >
+            {mapProjection === 'globe'
+              ? <Globe className="w-[18px] h-[18px] text-[var(--cyan-primary)] group-hover:scale-110 transition-transform" />
+              : <MapPinned className="w-[18px] h-[18px] text-[var(--text-secondary)] group-hover:text-[var(--gold-primary)] group-hover:scale-110 transition-all" />}
+            <span className="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 text-[8px] font-mono tracking-widest text-[var(--text-secondary)] whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity glass-panel px-2 py-1 z-[300]">
+              {mapProjection === 'globe' ? '3D GLOBE' : '2D MAP'}
+            </span>
+          </button>
 
-        {/* Map Style Toggle */}
-        <button
-          onClick={() => setMapStyle(s => s === 'dark' ? 'satellite' : 'dark')}
-          className="glass-panel p-3.5 pointer-events-auto hover:border-[var(--gold-primary)]/40 transition-colors group relative"
-          title={mapStyle === 'dark' ? 'Satellite View' : 'Night View'}
-        >
-          {mapStyle === 'dark' ? (
-            <Satellite className="w-5 h-5 text-[var(--alert-green)] group-hover:scale-110 transition-transform" />
-          ) : (
-            <Moon className="w-5 h-5 text-[var(--cyan-primary)] group-hover:scale-110 transition-transform" />
-          )}
-          <span className="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 text-[9px] font-mono text-[var(--text-muted)] whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity glass-panel px-2 py-1 z-[300]">
-            {mapStyle === 'dark' ? 'SATELLITE' : 'NIGHT MODE'}
-          </span>
-        </button>
+          <div className="w-px h-6 bg-white/10" />
 
+          {/* Map Style Toggle */}
+          <button
+            onClick={() => setMapStyle(s => s === 'dark' ? 'satellite' : 'dark')}
+            className="group relative flex items-center justify-center w-10 h-10 rounded-[10px] transition-colors"
+            style={{
+              background: mapStyle === 'satellite' ? 'rgba(0,230,118,0.12)' : 'transparent',
+              boxShadow: mapStyle === 'satellite' ? 'inset 0 0 0 1px rgba(0,230,118,0.35)' : 'none',
+            }}
+            title={mapStyle === 'dark' ? 'Switch to Satellite' : 'Switch to Night'}
+          >
+            {mapStyle === 'satellite'
+              ? <Satellite className="w-[18px] h-[18px] text-[var(--alert-green)] group-hover:scale-110 transition-transform" />
+              : <Moon className="w-[18px] h-[18px] text-[var(--text-secondary)] group-hover:text-[var(--cyan-primary)] group-hover:scale-110 transition-all" />}
+            <span className="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 text-[8px] font-mono tracking-widest text-[var(--text-secondary)] whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity glass-panel px-2 py-1 z-[300]">
+              {mapStyle === 'satellite' ? 'SATELLITE' : 'NIGHT'}
+            </span>
+          </button>
+        </div>
       </motion.div>
 
       {/* ── HEADER ── */}
-      <motion.div initial={{ opacity: 0, y: -20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 1, delay: 2.5 }} className={`absolute top-4 left-6 z-[200] pointer-events-none flex flex-col`}>
-        <div className="flex items-baseline gap-2">
-          <h1 className="text-xl font-bold tracking-[0.4em] text-[var(--gold-primary)] font-mono">OSIRIS</h1>
-          <span className="text-[10px] text-[var(--text-muted)] font-mono tracking-[0.15em] opacity-80">GLOBAL INTELLIGENCE COMMAND</span>
+      <motion.div initial={{ opacity: 0, y: -20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 1, delay: 2.5 }} className={`absolute top-4 z-[200] pointer-events-none flex flex-col`} style={{ left: isMobile ? '24px' : '64px', right: '24px' }}>
+        <div className="flex items-center gap-3 w-fit">
+          <svg viewBox="0 0 650 500" className="w-8 h-8 md:w-10 md:h-10 shrink-0 transition-colors duration-500 text-[#D4AF37] drop-shadow-[0_0_8px_rgba(255,215,0,0.5)]" fill="currentColor">
+            <path d="m620.39,364.82c-0.53628-7.2677-1.7767-14.482-5.0286-21.276-9.4786-19.803-33.963-29.34-53.026-19.284-15.333,8.0885-22.563,29.331-13.578,45.149,6.873,12.099,23.072,18.235,35.622,10.228,4.4328-2.828,7.6343-7.2793,8.9938-12.286,1.3595-5.0063,0.68452-10.798-2.9392-15.401-2.2364-2.8407-5.4473-4.7654-9.1114-5.408-3.664-0.64263-8.1708,0.40388-10.875,3.9972-1.7829,2.3692-1.91,4.5449-1.4108,7.1127,0.24961,1.2839,0.78116,2.8399,2.3513,3.9972,1.5702,1.1573,4.2926,1.9424,5.5844,0.58783,1.1069-1.1607-0.67477-3.153-0.73029-4.7559-0.0388-0.83158-0.0772-1.7317,0.26004-2.4745,0.89679-1.1463,1.8493-1.342,3.4682-1.0581,1.6548,0.29023,3.6474,1.4542,4.5851,2.6452v0.0588c2.0224,2.5986,2.3717,5.5943,1.5284,8.6999-0.81645,3.0066-2.8568,5.919-5.4668,7.7006l-0.29391,0.23513c-8.5452,5.4516-18.484,0.70317-23.392-7.9366-6.7162-11.823-1.5113-26.282,10.285-32.505,15.078-7.9537,35.744,1.451,40.36,17.085,4.566,15.464,2.8715,30.938,0.27385,37.511l10.609,0.073c2.5579-12.089,1.9287-15.035,1.9287-22.696z" />
+            <path d="m158.66,157a70.231,70.231,0,0,0,-14.44,42.81,70.235,70.235,0,1,0,140.47,0,70.231,70.231,0,0,0,-14.28,-42.81h-111.75z" />
+            <path d="m140.86,465.53c-6.7333,0-8.7137-5.4462-12.181-25.899-2.4479-14.774-7.1068-28.463-10.502-43.043-3.0219-13.117-5.6425-20.332-9.6694-26.618-6.5526-10.229-6.3011-20.921,0.71691-30.481,6.33-8.6232,6.827-11.121,6.5471-32.901-0.13783-10.725-0.56403-21.286-0.94711-23.468-0.88077-5.0179-4.6148-7.6923-13.904-9.9586-8.4827-2.0695-16.525-2.2933-41.967-1.1681-18.144,0.80245-20.457,0.72323-22.75-0.77901-5.627-3.687-2.9527-8.8405,12.261-23.626,15.69-15.249,23.876-24.688,38.811-44.75,26.839-36.053,30.927-40.83,57.501-49.189,19.575-6.1582,26.691-9.0119,62.031-10.06,24.654-0.7309,38.767,2.5963,45.357,3.3466,25.219,2.8716,66.247,14.877,91.933,26.083,13.581,5.9249,14.042,6.1723,30.115,16.152,11.981,7.4391,18.733,10.459,35.44,15.034,34.886,9.553,56.753,7.7583,92,10.378,9.2579,0.68808,49.298,3.5149,74.5,4.4784,30.689,1.1732,35.835-2.0376,38.423,0.54994,2.0315,2.0315,0.5636,8.1815,0.6024,14.306,0.0237,3.7378-0.18399,7.6642-0.48569,11.602-8.1923-1.424-8.0353-1.3676-26.54-2.9165-1.6808-0.14069-16.718-1.6695-44.5-4.1726-11.867-1.0692-70.326-2.8448-105.5-3.9248-16.997-0.52189-34.357-4.7228-51-1.2347-5.7624,1.2076,2.387-1.1161-16,7.4812-36.313,14.051-55.853,23.79-104.5,32.83-30.774,4.5201-33.208,4.9745-36.376,7.2909-1.7456,1.2764-1.662,1.6171,1.6767,6.8363,3.5642,5.5717,14.275,15.81,29.699,28.389,51.619,43.564,115.05,77.431,162.89,98.598,22.221,9.5122,37.55,14.655,50.108,16.811,61.892,13.654,134.26-9.4938,136.11-56.959,0.0489-1.256,0.49928-6.001-0.1398-12.079-0.44539-4.2357-0.89625-7.3216-2.2932-11.095-3.9795-10.75-12.413-20.407-28.672-21.755-11.746,0.022-20.375,6.1561-23.95,16.17-4.5622,12.78,1.3185,27.071,14.023,29.565,6.6403,1.3038,11.222-0.5256,14.271-4.4679,3.3424-4.3221,3.72-12.026,1.3559-15.634-2.2757-3.4732-7.2459-5.2754-10.824-3.9248-3.6125,1.3636-4.9933,0.36555-0.6538-3.1839,0.38036-0.24867,0.77844-0.4586,1.191-0.63136,6.6675-2.7918,17.127,4.1226,17.913,14.135,0.7119,11.495-7.7045,20.279-19.249,20.94-6.5659,0.37574-14.594-1.9665-20.026-7.8035-13.425-14.428-9.1712-34.885,2.9586-45.762,4.6131-4.1366,7.7535-6.0583,14.065-7.4773,19.37-4.3554,37.69,4.5134,45.528,24.301,3.5645,8.9992,3.7675,16.201,3.8515,23.221,0.70438,58.895-65.742,87.202-131.95,82.517-28.009-2.4123-46.229-6.8095-80.495-20.915-36.58-12.09-143.44-68.32-207.96-120.33-18.846-15.317-30.511-22.813-33.055-21.24-0.61585,0.38062-0.98989,11.992-0.99221,30.802-0.004,28.758-0.1019,30.352-2.0717,33.583-3.2793,5.3791-4.935,17.725-5.9822,44.608-1.6327,41.914-2.675,60.915-3.4439,62.778-1.3963,3.383-7.0306,4.6642-13.289,4.6642zm221.62-252.27c0.41803-2.1707-4.6044-8.6243-11.231-13.08-10.396-6.9893-22.385-11.512-34.092-15.96-71.934-23.518-145.08-20.065-174.03-4.962-10.593,5.1512-14.126,7.777-22.813,15.582-4.1291,3.7102-9.5939,9.7305-12.144,13.379-5.133,7.3428-10.014,13.339-19.014,23.362-9.3026,10.359-14.5,16.774-14.5,17.897,0,1.5721,7.8962,3.1488,17.5,3.5809,81.15,10.292,230.44,14.198,270.32-39.799zm224.18-69.351c-16.558-0.50003-42.467-2.0158-63.5-4.8954-19.525-2.6732-39.047-6.067-58-11.467-17.982-5.123-35.124-12.85-52.5-19.754-7.7243-3.0694-15.32-6.4533-23-9.6318-8.319-3.4429-16.53-7.1723-25-10.224-15.523-5.5928-30.986-11.946-47.239-14.789-41.988-7.3464-85.261-8.7793-127.76-5.4986-23.554,1.8182-46.695,7.7124-69.5,13.878-17.863,4.8293-35.019,11.972-52.5,18.041-5.069,1.761-10.039,6.841-15.177,5.321-5.396-1.6-10.73-7.749-10.317-13.361,0.434-5.884,7.835-9.014,12.753-12.272,16.823-11.146,36.498-17.485,55.661-23.803,19.219-6.3349,38.923-12.127,59.072-14.001,54.326-5.0532,110.09-3.4301,163.5,7.7269,28.29,5.9098,53.945,20.759,81,30.92,31.437,11.806,61.76,27.444,94.5,34.909,33.045,7.534,83.745,9.6292,101.22,9.5911,6.5425-0.0143,6.7685,0.0708,8.3595,3.1475,1.8515,3.5805,3.1256,14.296,1.7926,15.077-1.3395,0.78418-21.593,1.4453-33.376,1.0894z" />
+          </svg>
+          <div className="flex flex-col items-start gap-0.5">
+            <h1 className="text-lg md:text-xl font-bold tracking-[0.4em] text-[#D4AF37] font-mono">OSIRIS</h1>
+            <span className="text-[8px] md:text-[9px] font-mono tracking-[0.2em] opacity-80 uppercase text-[#D4AF37]">GLOBAL INTELLIGENCE COMMAND</span>
+          </div>
         </div>
-        <div className="flex items-center gap-4 mt-1">
-          <span className="text-[5px] text-[var(--text-muted)] font-mono tracking-[0.3em] uppercase opacity-40">
-            POWERED BY OSIRIS OPEN SOURCE INTELLIGENCE · C2 ENGINE: PHYSICAL COMMAND CORE · SENSORS: ORBITAL LATTICE · NET: LYCAN NETWORK
+        <div className="flex items-center gap-3 mt-1.5 pl-[44px] min-w-0 pr-4">
+          <span className="text-[5px] md:text-[6px] text-[var(--text-muted)] font-mono tracking-[0.2em] md:tracking-[0.3em] uppercase opacity-40 truncate">
+            POWERED BY OSIRIS OPEN SOURCE INTELLIGENCE <span className="hidden md:inline">· C2 ENGINE: PHYSICAL COMMAND CORE · SENSORS: ORBITAL LATTICE · NET: LYCAN NETWORK</span>
           </span>
         </div>
       </motion.div>
+
 
       {/* ── TOP-RIGHT STATUS (desktop) — C2 DISPLAY ── */}
       <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 3 }} className="status-bar-desktop absolute top-4 right-6 z-[200] pointer-events-none flex items-center gap-4 text-[9px] font-mono tracking-widest text-[var(--text-muted)]">
@@ -840,9 +993,25 @@ export default function Dashboard() {
 
         <UptimeClock />
         <span className="text-[10px] font-bold tracking-[0.2em] text-[var(--text-muted)] opacity-50 ml-2">V.4.1</span>
+        
+        <TokenPanel />
+
+        <a href='https://ko-fi.com/M8D41ZYW4Z' target='_blank' rel='noopener noreferrer' className="pointer-events-auto glass-panel px-3 py-1.5 flex items-center gap-1.5 text-[8px] font-mono tracking-widest hover:opacity-80 transition-opacity border-[var(--gold-primary)]/40 bg-[var(--gold-primary)]/10 ml-4 shadow-[0_0_10px_rgba(255,215,0,0.1)]">
+          <div className="w-1.5 h-1.5 rounded-full bg-[var(--gold-primary)] animate-osiris-pulse" />
+          <span className="text-[var(--gold-primary)] font-bold">SUPPORT PROJECT</span>
+        </a>
       </motion.div>
 
       {/* ── MOBILE: Compact top status ── */}
+      {isMobile && (
+        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 2.5 }} className="absolute top-3 right-3 z-[200] pointer-events-auto flex items-center gap-2">
+          <TokenPanel />
+          <a href='https://ko-fi.com/M8D41ZYW4Z' target='_blank' rel='noopener noreferrer' className="glass-panel px-2 py-1 flex items-center gap-1.5 text-[7px] font-mono tracking-widest hover:opacity-80 transition-opacity border-[var(--gold-primary)]/40 bg-[var(--gold-primary)]/10">
+            <div className="w-1 h-1 rounded-full bg-[var(--gold-primary)] animate-osiris-pulse" />
+            <span className="text-[var(--gold-primary)] font-bold">SUPPORT PROJECT</span>
+          </a>
+        </motion.div>
+      )}
       {isMobile && (
         <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 2.5 }} className="absolute top-3 right-3 z-[200] pointer-events-auto flex items-center gap-2">
           <a href='https://ko-fi.com/M8D41ZYW4Z' target='_blank' className="glass-panel px-2 py-1 flex items-center gap-1.5 text-[7px] font-mono tracking-widest hover:opacity-80 transition-opacity border-[var(--gold-primary)]/40 bg-[var(--gold-primary)]/10">
@@ -862,7 +1031,21 @@ export default function Dashboard() {
       {/* ── RIGHT TOOL STRIP (desktop only — mobile uses bottom nav) ── */}
       {!isMobile && <div className="absolute right-2 top-1/2 -translate-y-1/2 flex flex-col gap-2 z-[250] pointer-events-auto bg-black/40 backdrop-blur-sm p-1 rounded-full border border-white/5">
         <div className="relative group">
-          <button onClick={() => { setShowIntel(!showIntel); setShowMarkets(false); setShowAlerts(false); }} className={`w-8 h-8 rounded-full flex items-center justify-center transition-colors ${showIntel ? 'bg-[var(--cyan-primary)]/20' : 'hover:bg-white/10'}`}>
+          <button onClick={() => { setShowFusion(!showFusion); setShowIntel(false); setShowMarkets(false); setShowAlerts(false); setShowEntityGraph(false); }} className={`w-8 h-8 rounded-full flex items-center justify-center transition-colors ${showFusion ? 'bg-[#FF1744]/20' : 'hover:bg-white/10'}`} title="Global Threat Fusion">
+            <Activity className={`w-4 h-4 ${showFusion ? 'text-[#FF1744]' : 'text-white/60'}`} />
+          </button>
+          {/* Threat Fusion HUD Slideout */}
+          <AnimatePresence>
+            {showFusion && (
+              <motion.div initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: 20 }} className="absolute right-12 top-1/2 -translate-y-1/2">
+                <ThreatFusionHUD onLocate={(lat, lng) => { setFlyToLocation({ lat, lng, ts: Date.now() }); setMapView(v => ({ ...v, zoom: Math.max(v.zoom, 5) })); }} />
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
+
+        <div className="relative group">
+          <button onClick={() => { setShowIntel(!showIntel); setShowMarkets(false); setShowAlerts(false); setShowFusion(false); }} className={`w-8 h-8 rounded-full flex items-center justify-center transition-colors ${showIntel ? 'bg-[var(--cyan-primary)]/20' : 'hover:bg-white/10'}`}>
             <Radar className={`w-4 h-4 ${showIntel ? 'text-[var(--cyan-primary)]' : 'text-white/60'}`} />
           </button>
           {/* OSINT / Recon Panel Slideout */}
@@ -882,7 +1065,7 @@ export default function Dashboard() {
         </div>
 
         <div className="relative group">
-          <button onClick={() => { setShowMarkets(!showMarkets); setShowIntel(false); setShowAlerts(false); }} className={`w-8 h-8 rounded-full flex items-center justify-center transition-colors ${showMarkets ? 'bg-[var(--gold-primary)]/20' : 'hover:bg-white/10'}`}>
+          <button onClick={() => { setShowMarkets(!showMarkets); setShowIntel(false); setShowAlerts(false); setShowFusion(false); }} className={`w-8 h-8 rounded-full flex items-center justify-center transition-colors ${showMarkets ? 'bg-[var(--gold-primary)]/20' : 'hover:bg-white/10'}`}>
             <BarChart3 className={`w-4 h-4 ${showMarkets ? 'text-[var(--gold-primary)]' : 'text-white/60'}`} />
           </button>
           {/* Markets Panel Slideout */}
@@ -896,7 +1079,7 @@ export default function Dashboard() {
         </div>
 
         <div className="relative group">
-          <button onClick={() => { setShowAlerts(!showAlerts); setShowIntel(false); setShowMarkets(false); setShowEntityGraph(false); }} className={`w-8 h-8 rounded-full flex items-center justify-center transition-colors ${showAlerts ? 'bg-[#FF3D3D]/20' : 'hover:bg-white/10'}`}>
+          <button onClick={() => { setShowAlerts(!showAlerts); setShowIntel(false); setShowMarkets(false); setShowEntityGraph(false); setShowFusion(false); }} className={`w-8 h-8 rounded-full flex items-center justify-center transition-colors ${showAlerts ? 'bg-[#FF3D3D]/20' : 'hover:bg-white/10'}`}>
             <AlertTriangle className={`w-4 h-4 ${showAlerts ? 'text-[#FF3D3D]' : 'text-white/60'}`} />
           </button>
           {/* Alerts Panel Slideout */}
@@ -911,37 +1094,24 @@ export default function Dashboard() {
 
         <div className="relative group">
           <button onClick={() => { setShowEntityGraph(!showEntityGraph); setShowIntel(false); setShowMarkets(false); setShowAlerts(false); }} className={`w-8 h-8 rounded-full flex items-center justify-center transition-colors ${showEntityGraph ? 'bg-[#D4AF37]/20' : 'hover:bg-white/10'}`}>
-            <Network className={`w-4 h-4 ${showEntityGraph ? 'text-[#D4AF37]' : 'text-white/60'}`} />
+            <Network className={`w-4 h-4 ${showEntityGraph ? 'text-[var(--gold-primary)]' : 'text-white/60'}`} />
           </button>
         </div>
 
-        {/* Self Track — IP Geolocation */}
-        <div className="w-6 border-t border-white/10 mx-auto" />
         <div className="relative group">
-          <button 
-            onClick={() => {
-              fetch('http://ip-api.com/json/?fields=status,lat,lon,city,regionName,country,query,isp,org,as')
-                .then(r => r.json())
-                .then(geo => {
-                  if (geo.status === 'success' && geo.lat && geo.lon) {
-                    // Fly to user location
-                    setFlyToLocation({ lat: geo.lat, lng: geo.lon, ts: Date.now() });
-                    setMapView(v => ({ ...v, zoom: 14 }));
-                    // Also trigger a scan target marker at user location
-                    setScanTargets(prev => [
-                      { id: geo.query, timestamp: Date.now(), lat: geo.lat, lng: geo.lon, city: geo.city, country: geo.country, isp: geo.isp, org: geo.org, as: geo.as },
-                      ...prev.filter(t => t.id !== geo.query)
-                    ].slice(0, 10));
-                  }
-                })
-                .catch(() => {});
-            }}
-            className="w-8 h-8 rounded-full flex items-center justify-center transition-colors hover:bg-[#39FF14]/20 group"
-            title="Self Track — Locate your IP"
-          >
-            <Crosshair className="w-4 h-4 text-white/60 group-hover:text-[#39FF14] transition-colors" />
+          <button onClick={() => { setShowDesktopSearch(!showDesktopSearch); setShowIntel(false); setShowMarkets(false); setShowAlerts(false); setShowEntityGraph(false); }} className={`w-8 h-8 rounded-full flex items-center justify-center transition-colors ${showDesktopSearch ? 'bg-[var(--gold-primary)]/20' : 'hover:bg-white/10'}`}>
+            <Search className={`w-4 h-4 ${showDesktopSearch ? 'text-[var(--gold-primary)]' : 'text-white/60'}`} />
           </button>
+          <AnimatePresence>
+            {showDesktopSearch && (
+              <motion.div initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: 20 }} className="absolute right-12 top-1/2 -translate-y-1/2 w-80">
+                <SearchBar alwaysExpanded onLocate={(lat, lng, zoom) => { setFlyToLocation({ lat, lng, zoom, ts: Date.now() }); setShowDesktopSearch(false); }} />
+              </motion.div>
+            )}
+          </AnimatePresence>
         </div>
+
+
       </div>}
 
       {/* ── LIVE FEED VIEWER OVERLAY ── */}
@@ -1035,6 +1205,14 @@ export default function Dashboard() {
 
       {/* ═══ MOBILE UI ═══ */}
       {isMobile && (
+        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 2.5 }} className="absolute top-3 right-3 z-[200] pointer-events-auto flex items-center gap-2">
+          <a href='https://ko-fi.com/M8D41ZYW4Z' target='_blank' rel='noopener noreferrer' className="glass-panel px-2 py-1 flex items-center gap-1.5 text-[7px] font-mono tracking-widest hover:opacity-80 transition-opacity border-[var(--gold-primary)]/40 bg-[var(--gold-primary)]/10">
+            <div className="w-1 h-1 rounded-full bg-[var(--gold-primary)] animate-osiris-pulse" />
+            <span className="text-[var(--gold-primary)] font-bold">SUPPORT PROJECT</span>
+          </a>
+        </motion.div>
+      )}
+      {isMobile && (
         <>
           {/* Mobile Bottom Navigation */}
           <div className="mobile-nav">
@@ -1093,7 +1271,7 @@ export default function Dashboard() {
                   {mobilePanel === 'intel' && <IntelFeed data={data} onLocate={(lat, lng) => { setFlyToLocation({ lat, lng, ts: Date.now() }); setMobilePanel(null); }} />}
                   {mobilePanel === 'search' && (
                     <div className="space-y-2">
-                      <SearchBar onLocate={(lat, lng) => { setFlyToLocation({ lat, lng, ts: Date.now() }); setMobilePanel(null); }} />
+                      <SearchBar onLocate={(lat, lng, zoom) => { setFlyToLocation({ lat, lng, zoom, ts: Date.now() }); setMobilePanel(null); }} />
                       <SharePanel mapView={mapView} activeLayers={activeLayers} mouseCoords={null} />
                     </div>
                   )}
@@ -1111,7 +1289,7 @@ export default function Dashboard() {
 
       {/* ── BOTTOM RAW METRICS (desktop) ── */}
       {!isMobile && (
-        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 3, duration: 0.8 }} className="desktop-only absolute bottom-4 left-20 z-[200] pointer-events-auto">
+        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 3, duration: 0.8 }} className="desktop-only absolute bottom-8 z-[200] pointer-events-auto" style={{ left: '72px' }}>
           <div className="flex items-center gap-6 text-[8px] font-mono tracking-widest text-[var(--text-muted)] opacity-60">
             <div className="flex gap-2 items-center">
               <span>COORD</span>
@@ -1130,7 +1308,7 @@ export default function Dashboard() {
       )}
 
       {/* ── Scale Bar (desktop) ── */}
-      <div className="desktop-only absolute bottom-[4.5rem] left-[20rem] z-[201] pointer-events-none">
+      <div className="desktop-only absolute bottom-[4.5rem] left-[12rem] z-[201] pointer-events-none">
         <ScaleBar zoom={mapView.zoom} latitude={mapView.latitude} />
       </div>
 
@@ -1199,15 +1377,18 @@ export default function Dashboard() {
         </div>
       ))}
 
+      {/* Command Palette (⌘K / Ctrl+K) */}
+      <CommandPalette commands={paletteCommands} />
+
       {/* Keyboard Shortcuts Overlay */}
       <KeyboardShortcuts />
 
       {/* ── GLOBAL STATUS TICKER (bottom) ── */}
-      <GlobalStatusBar />
+      <GlobalStatusBar onThreatClick={() => { closeRightPanels(); setShowFusion(true); }} />
 
       {/* Shortcut hint */}
       <div className="desktop-only absolute bottom-[26px] right-5 z-[200] pointer-events-none text-[6px] font-mono text-[var(--text-muted)]/40 tracking-widest">
-        [?] SHORTCUTS · [F] FULLSCREEN · [S] SHARE · [R] RESET VIEW
+        [⌘K] COMMAND · [?] SHORTCUTS · [F] FULLSCREEN · [S] SHARE · [R] RESET VIEW
       </div>
 
 

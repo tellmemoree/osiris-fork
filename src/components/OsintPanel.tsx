@@ -4,6 +4,7 @@ import { useState, useCallback, useEffect, memo } from 'react';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
+  LocateFixed,
   Search, Radar, Globe, Shield, FileText, Radio,
   ChevronDown, ChevronUp, Loader2, AlertTriangle, Server,
   Wifi, Lock, MapPin, Bug, Code, Layers, Network, Fingerprint,
@@ -75,6 +76,37 @@ function OsintPanelInner({ isMobile, onSweepVisualize, onScanGeolocate }: OsintP
       return next;
     });
   }, [cveCache]);
+
+    const handleSelfTrack = () => {
+      setLoading(true);
+      setError('');
+      fetch('/api/geo')
+        .then(r => {
+          if (!r.ok) throw new Error(`Server returned ${r.status}`);
+          return r.json();
+        })
+        .then(geo => {
+          setLoading(false);
+          if (geo.status === 'success' && geo.lat && geo.lon && onScanGeolocate) {
+            onScanGeolocate(geo.query || 'local', {
+              lat: geo.lat,
+              lng: geo.lon,
+              city: geo.city || 'Unknown',
+              country: geo.country || 'Unknown',
+              isp: geo.isp || 'Unknown',
+              org: geo.org || 'Unknown',
+              as: geo.as || 'Unknown',
+              type: 'self_track'
+            });
+          } else {
+            setError("Could not retrieve your IP location.");
+          }
+        })
+        .catch(err => {
+          setLoading(false);
+          setError("Network error: " + err.message);
+        });
+    };
 
   const runLookup = useCallback(async () => {
     if (!query.trim() || loading) return;
@@ -664,20 +696,34 @@ function OsintPanelInner({ isMobile, onSweepVisualize, onScanGeolocate }: OsintP
     <div className="flex flex-col gap-2.5">
       {/* Tool Grid */}
       <div className="flex flex-col gap-1">
-        {/* Sweep - Main Action */}
-        {TABS.filter(t => t.id === 'sweep').map(tab => (
-          <button key={tab.id} onClick={() => { setActiveTab(tab.id); setQuery(''); setResults(null); setError(''); }}
-            className={`flex items-center justify-center gap-2 px-3 py-3 rounded-lg text-[12px] font-mono tracking-widest font-bold transition-all border ${activeTab === tab.id ? 'border-opacity-60 bg-opacity-20' : 'border-[var(--border-secondary)] hover:bg-[var(--hover-accent)]'}`}
-            style={{ 
-              borderColor: activeTab === tab.id ? tab.color : 'rgba(255,61,61,0.3)', 
-              backgroundColor: activeTab === tab.id ? `${tab.color}20` : 'rgba(255,61,61,0.05)', 
-              color: activeTab === tab.id ? tab.color : tab.color,
-              boxShadow: activeTab === tab.id ? `0 0 15px ${tab.color}30` : 'none'
-            }}>
-            <tab.icon className="w-5 h-5" />
-            <span>GLOBAL {tab.label}</span>
+        {/* Sweep & Self Track Actions */}
+        <div className="grid grid-cols-2 gap-2">
+          {TABS.filter(t => t.id === 'sweep').map(tab => (
+            <button key={tab.id} onClick={() => { 
+                  setActiveTab(tab.id); setQuery(''); setResults(null); setError(''); 
+                }}
+                className={`w-full py-4 rounded-lg border flex flex-col items-center justify-center gap-2 transition-all ${
+                  activeTab === tab.id ? 'bg-[var(--bg-tertiary)] border-opacity-50' : 'bg-[#0D0D0C] hover:bg-[var(--hover-accent)] border-transparent'
+                }`}
+                style={{ borderColor: activeTab === tab.id ? tab.color : 'rgba(255, 61, 61, 0.2)' }}
+              >
+                <div className="flex items-center gap-3">
+                  <tab.icon className="w-5 h-5" style={{ color: tab.color }} />
+                  <span className="font-mono font-bold tracking-[0.1em] text-[11px]" style={{ color: tab.color }}>GLOBAL SWEEP</span>
+                </div>
+            </button>
+          ))}
+          <button onClick={handleSelfTrack}
+            disabled={loading}
+            className={`w-full py-4 rounded-lg border flex flex-col items-center justify-center gap-2 transition-all ${loading ? 'opacity-60 cursor-wait' : 'hover:bg-[var(--hover-accent)] hover:shadow-[0_0_20px_rgba(0,230,118,0.15)]'} bg-[#0D0D0C]`}
+            style={{ borderColor: 'rgba(0, 230, 118, 0.2)' }}
+          >
+            <div className="flex items-center gap-3">
+              <LocateFixed className={`w-5 h-5 ${loading ? 'animate-spin' : ''}`} style={{ color: '#00E676' }} />
+              <span className="font-mono font-bold tracking-[0.1em] text-[11px]" style={{ color: '#00E676' }}>{loading ? 'TRACKING...' : 'SELF TRACK'}</span>
+            </div>
           </button>
-        ))}
+        </div>
         {/* Other Tools */}
         <div className="grid grid-cols-5 gap-1 mt-1">
           {TABS.filter(t => t.id !== 'sweep').map(tab => (

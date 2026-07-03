@@ -41,6 +41,35 @@ const PORTS = [
   { name: 'Felixstowe', country: 'GB', lat: 51.96, lng: 1.35, type: 'container', volume: '3.8M TEU', rank: 25 },
   { name: 'Santos', country: 'BR', lat: -23.95, lng: -46.31, type: 'container', volume: '4.2M TEU', rank: 22 },
   { name: 'Colombo', country: 'LK', lat: 6.94, lng: 79.84, type: 'container', volume: '7.2M TEU', rank: 17 },
+  { name: 'Tianjin', country: 'CN', lat: 39.00, lng: 117.72, type: 'container', volume: '20.3M TEU', rank: 8 },
+  { name: 'Hong Kong', country: 'HK', lat: 22.30, lng: 114.13, type: 'container', volume: '14.3M TEU', rank: 10 },
+  { name: 'Kaohsiung', country: 'TW', lat: 22.55, lng: 120.30, type: 'container', volume: '9.8M TEU', rank: 18 },
+  { name: 'New York / NJ', country: 'US', lat: 40.66, lng: -74.09, type: 'container', volume: '9.5M TEU', rank: 19 },
+  { name: 'Tanger Med', country: 'MA', lat: 35.88, lng: -5.50, type: 'container', volume: '7.6M TEU', rank: 21 },
+  { name: 'Laem Chabang', country: 'TH', lat: 13.08, lng: 100.88, type: 'container', volume: '8.7M TEU', rank: 23 },
+  { name: 'Ho Chi Minh (Cat Lai)', country: 'VN', lat: 10.75, lng: 106.79, type: 'container', volume: '7.9M TEU', rank: 24 },
+  { name: 'Mundra', country: 'IN', lat: 22.74, lng: 69.70, type: 'container', volume: '6.6M TEU', rank: 26 },
+  { name: 'Jakarta (Tanjung Priok)', country: 'ID', lat: -6.10, lng: 106.88, type: 'container', volume: '6.5M TEU', rank: 27 },
+  { name: 'Jawaharlal Nehru', country: 'IN', lat: 18.95, lng: 72.95, type: 'container', volume: '6.4M TEU', rank: 28 },
+  { name: 'Valencia', country: 'ES', lat: 39.44, lng: -0.32, type: 'container', volume: '5.6M TEU', rank: 29 },
+  { name: 'Piraeus', country: 'GR', lat: 37.94, lng: 23.63, type: 'container', volume: '5.4M TEU', rank: 30 },
+  { name: 'Manila', country: 'PH', lat: 14.60, lng: 120.96, type: 'container', volume: '5.3M TEU' },
+  { name: 'Algeciras', country: 'ES', lat: 36.13, lng: -5.44, type: 'container', volume: '5.1M TEU' },
+  { name: 'Salalah', country: 'OM', lat: 16.95, lng: 54.01, type: 'container', volume: '4.5M TEU' },
+  { name: 'Colon', country: 'PA', lat: 9.36, lng: -79.90, type: 'container', volume: '4.3M TEU' },
+  { name: 'Port Said', country: 'EG', lat: 31.25, lng: 32.30, type: 'container', volume: '4.0M TEU' },
+  { name: 'Bremerhaven', country: 'DE', lat: 53.55, lng: 8.57, type: 'container', volume: '4.6M TEU' },
+  { name: 'Vancouver', country: 'CA', lat: 49.29, lng: -123.11, type: 'container', volume: '3.5M TEU' },
+  { name: 'Seattle-Tacoma', country: 'US', lat: 47.27, lng: -122.41, type: 'container', volume: '3.4M TEU' },
+  { name: 'Manzanillo', country: 'MX', lat: 19.05, lng: -104.31, type: 'container', volume: '3.4M TEU' },
+  { name: 'Le Havre', country: 'FR', lat: 49.48, lng: 0.12, type: 'container', volume: '3.0M TEU' },
+  { name: 'Barcelona', country: 'ES', lat: 41.35, lng: 2.16, type: 'container', volume: '3.5M TEU' },
+  { name: 'Gioia Tauro', country: 'IT', lat: 38.43, lng: 15.90, type: 'container', volume: '3.5M TEU' },
+  { name: 'Melbourne', country: 'AU', lat: -37.83, lng: 144.92, type: 'container', volume: '3.3M TEU' },
+  { name: 'Durban', country: 'ZA', lat: -29.87, lng: 31.03, type: 'container', volume: '2.9M TEU' },
+  { name: 'Gdansk', country: 'PL', lat: 54.40, lng: 18.68, type: 'container', volume: '2.1M TEU' },
+  { name: 'Cartagena', country: 'CO', lat: 10.40, lng: -75.52, type: 'container', volume: '3.0M TEU' },
+  { name: 'Sydney (Botany)', country: 'AU', lat: -33.97, lng: 151.23, type: 'container', volume: '2.6M TEU' },
 
   // ── Energy/Oil Ports ──
   { name: 'Ras Tanura', country: 'SA', lat: 26.64, lng: 50.16, type: 'energy', volume: '6.5M bpd' },
@@ -94,6 +123,72 @@ if (!globalForAis.shipsCache) {
 }
 
 const shipsCache = globalForAis.shipsCache;
+
+// ── KEYLESS real-time ship source: Digitraffic marine AIS (Finnish Transport
+//    Agency). ~18K live vessels across the Baltic/North-Sea approaches, no API
+//    key — so the maritime layer is populated even without AIS_API_KEY. The
+//    keyed aisstream feed (when configured) adds global chokepoint coverage on
+//    top. Both merge by MMSI. ──
+function aisTypeToCategory(t: number): string {
+  if (t === 35) return 'military';
+  if (t >= 80 && t <= 89) return 'tanker';
+  if (t >= 70 && t <= 79) return 'cargo';
+  if (t >= 60 && t <= 69) return 'passenger';
+  if (t >= 40 && t <= 49) return 'hsc';
+  if (t >= 30 && t <= 39) return 'fishing';
+  return 'other';
+}
+
+let dtCache: any[] = [];
+let dtCacheAt = 0;
+let dtInflight: Promise<any[]> | null = null;
+const DT_TTL = 45000;
+const DT_HEADERS = { 'Digitraffic-User': 'OSIRIS-OSINT', 'Accept-Encoding': 'gzip' };
+
+async function fetchDigitraffic(): Promise<any[]> {
+  if (Date.now() - dtCacheAt < DT_TTL) return dtCache;
+  if (dtInflight) return dtInflight;
+  dtInflight = (async () => {
+    try {
+      const [locRes, vesRes] = await Promise.all([
+        fetch('https://meri.digitraffic.fi/api/ais/v1/locations', { headers: DT_HEADERS, signal: AbortSignal.timeout(12000) }),
+        fetch('https://meri.digitraffic.fi/api/ais/v1/vessels', { headers: DT_HEADERS, signal: AbortSignal.timeout(12000) }),
+      ]);
+      if (!locRes.ok) return dtCache;
+      const loc = await locRes.json();
+      const meta = new Map<number, any>();
+      if (vesRes.ok) {
+        const vs = await vesRes.json();
+        if (Array.isArray(vs)) for (const v of vs) meta.set(v.mmsi, v);
+      }
+      const ships: any[] = [];
+      for (const f of (loc.features || [])) {
+        const p = f.properties || {};
+        const c = f.geometry?.coordinates;
+        if (!c || c.length < 2) continue;
+        const m = meta.get(p.mmsi) || {};
+        ships.push({
+          id: p.mmsi, mmsi: p.mmsi,
+          lat: c[1], lng: c[0],
+          speed: typeof p.sog === 'number' ? p.sog : 0,
+          heading: (p.heading != null && p.heading < 360) ? p.heading : (p.cog ?? 0),
+          name: (m.name && m.name.trim()) || `MMSI ${p.mmsi}`,
+          destination: (m.destination && m.destination.trim()) || '',
+          type: aisTypeToCategory(m.shipType || 0),
+          source: 'digitraffic',
+          timestamp: Date.now(),
+        });
+      }
+      if (ships.length > 0) { dtCache = ships; dtCacheAt = Date.now(); }
+      return dtCache;
+    } catch {
+      return dtCache;
+    } finally {
+      dtInflight = null;
+    }
+  })();
+  return dtInflight;
+}
 
 function connectAisStream() {
   if (globalForAis.isAisConnecting) return;
@@ -215,11 +310,23 @@ async function fetchVesselApiFallback() {
   // Mock data removed per user request. We only rely on real live stream data.
 }
 
-export async function GET() {
-  // Trigger Hybrid Fallback
-  await fetchVesselApiFallback();
+// Response cache — merging + congestion math over thousands of ships is O(ports×ships);
+// caching keeps it cheap at scale and lets Cloudflare's edge serve most requests.
+let respCache: any = null;
+let respCacheAt = 0;
+const RESP_TTL = 30000;
+const SHIP_CAP = 8000; // keep the map (and payload) performant
+const EDGE_CC = 'public, s-maxage=30, stale-while-revalidate=60';
 
-  // Clean up stale ships (older than 10 minutes)
+export async function GET() {
+  if (respCache && Date.now() - respCacheAt < RESP_TTL) {
+    return NextResponse.json(respCache, { headers: { 'Cache-Control': EDGE_CC } });
+  }
+
+  // Keyless Digitraffic feed (always) + keyed aisstream cache (if configured), merged by MMSI.
+  const dtShips = await fetchDigitraffic();
+
+  // Clean up stale aisstream ships (older than 10 minutes)
   const now = Date.now();
   for (const [mmsi, ship] of shipsCache.entries()) {
     if (now - ship.timestamp > 10 * 60 * 1000) {
@@ -227,7 +334,11 @@ export async function GET() {
     }
   }
 
-  const ships = Array.from(shipsCache.values());
+  const byMmsi = new Map<number, any>();
+  for (const s of dtShips) byMmsi.set(s.mmsi, s);
+  for (const s of shipsCache.values()) byMmsi.set(s.mmsi, s); // aisstream (global) overrides
+  let ships = Array.from(byMmsi.values());
+  if (ships.length > SHIP_CAP) ships = ships.slice(0, SHIP_CAP);
 
   // Dynamically calculate live traffic (Fast approximation of Haversine)
   const getDistanceKm = (lat1: number, lng1: number, lat2: number, lng2: number) => {
@@ -290,18 +401,18 @@ export async function GET() {
     };
   });
 
-  return NextResponse.json({
+  const payload = {
     ports: dynamicPorts,
     chokepoints: dynamicChokepoints,
-    ships: ships,
+    ships,
     total_ports: dynamicPorts.length,
     total_chokepoints: dynamicChokepoints.length,
     total_ships: ships.length,
+    sources: (process.env.AIS_API_KEY ? ['aisstream.io'] : []).concat(['Digitraffic marine AIS']),
     timestamp: new Date().toISOString(),
-  }, {
-    headers: { 
-      'Cache-Control': 'no-store, no-cache, must-revalidate',
-      'Pragma': 'no-cache'
-    },
-  });
+  };
+  respCache = payload;
+  respCacheAt = Date.now();
+
+  return NextResponse.json(payload, { headers: { 'Cache-Control': EDGE_CC } });
 }

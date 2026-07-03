@@ -5,6 +5,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { Keyboard, X } from 'lucide-react';
 
 const SHORTCUTS = [
+  { key: '⌘K', desc: 'Command palette' },
   { key: 'F', desc: 'Toggle fullscreen' },
   { key: 'S', desc: 'Share current view' },
   { key: 'L', desc: 'Toggle layer panel' },

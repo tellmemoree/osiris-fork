@@ -2247,3 +2247,79 @@ html, body {
     transition-duration: 0.01ms !important;
   }
 }
+
+/* ═══════════════════════════════════════════════════════════════
+   UI/UX LEVEL-UP — cohesive polish (theme-aware via tokens)
+   ═══════════════════════════════════════════════════════════════ */
+
+/* ── Branded text selection (was default browser blue) ── */
+::selection {
+  background: rgba(var(--gold-rgb), 0.28);
+  color: var(--text-heading);
+  text-shadow: none;
+}
+
+/* ── Accessible keyboard focus ring — visible only for keyboard nav,
+      never on mouse click. Uses box-shadow so it never shifts layout. ── */
+:focus { outline: none; }
+:focus-visible {
+  outline: none;
+  box-shadow:
+    0 0 0 2px var(--bg-void),
+    0 0 0 3px rgba(var(--gold-rgb), 0.75),
+    0 0 12px rgba(var(--gold-rgb), 0.35);
+  border-radius: 6px;
+}
+
+/* ── Snappier interactive feedback ──
+      The global `* { transition: 0.6s }` is tuned for the theme cross-fade,
+      but it makes hovers feel sluggish. Interactive elements get a fast,
+      responsive curve instead (theme change on them is still smooth enough). */
+button, a, [role="button"], .layer-toggle, .mobile-nav-btn, summary, select, input {
+  transition:
+    background-color 0.18s ease,
+    border-color 0.18s ease,
+    color 0.18s ease,
+    box-shadow 0.18s ease,
+    transform 0.12s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* ── Tactile press micro-interaction ── */
+button:active:not(:disabled),
+[role="button"]:active,
+.layer-toggle:active {
+  transform: scale(0.97);
+}
+
+/* ── Premium glass depth: brighter top sheen + hover lift ── */
+.glass-panel {
+  box-shadow:
+    0 4px 30px rgba(0, 0, 0, 0.55),
+    0 1px 0 rgba(var(--gold-rgb), 0.10) inset,
+    0 12px 40px -12px rgba(0, 0, 0, 0.6),
+    0 -1px 0 rgba(0, 0, 0, 0.3) inset;
+}
+.glass-panel:hover {
+  border-color: rgba(var(--gold-rgb), 0.28);
+  box-shadow:
+    0 6px 34px rgba(0, 0, 0, 0.6),
+    0 1px 0 rgba(var(--gold-rgb), 0.14) inset,
+    0 16px 48px -14px rgba(0, 0, 0, 0.65),
+    0 0 24px -6px rgba(var(--gold-rgb), 0.12);
+}
+
+/* ── Interactive rows get a smooth accent wash on hover ── */
+.osiris-row {
+  border-radius: 8px;
+  transition: background-color 0.18s ease, transform 0.12s ease;
+}
+.osiris-row:hover {
+  background: var(--hover-accent);
+}
+
+/* ── Respect reduced-motion for the new micro-interactions too ── */
+@media (prefers-reduced-motion: reduce) {
+  button:active:not(:disabled),
+  [role="button"]:active,
+  .layer-toggle:active { transform: none; }
+}

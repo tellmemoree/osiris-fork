@@ -28,11 +28,9 @@ if (!globalForSDK.sdkIngestLog) {
   globalForSDK.sdkIngestLog = [];
 }
 
-// Simple API key validation (in production, use proper auth)
-const VALID_KEYS = new Set([
-  process.env.SDK_INGEST_KEY || 'polybolos-dev-key',
-  'lattice-integration-key',
-]);
+// Fail-closed: require SDK_INGEST_KEY env var, disable endpoint when unset
+const SDK_KEY = process.env.SDK_INGEST_KEY;
+const VALID_KEYS = SDK_KEY ? new Set([SDK_KEY]) : null;
 
 export async function POST(request: NextRequest) {
   try {
@@ -48,7 +46,15 @@ export async function POST(request: NextRequest) {
       }, { status: 400 });
     }
 
-    // Validate API key
+    // Validate API key (fail-closed: endpoint disabled when SDK_INGEST_KEY is unset)
+    if (!VALID_KEYS) {
+      return NextResponse.json({
+        accepted: 0,
+        rejected: 0,
+        errors: ['Ingest endpoint disabled — SDK_INGEST_KEY not configured'],
+        timestamp: new Date().toISOString(),
+      }, { status: 503 });
+    }
     if (!VALID_KEYS.has(body.apiKey)) {
       return NextResponse.json({
         accepted: 0,

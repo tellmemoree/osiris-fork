@@ -20,7 +20,10 @@ export async function GET(request: NextRequest) {
         'Accept': '*/*',
         'User-Agent': 'Osiris-Tile-Proxy/1.0',
       },
-      // Using Next.js fetch cache options to heavily cache tiles locally
+      // Bound the upstream fetch so a slow/unreachable CDN can't hang the request
+      // and leak connections into the shared pool (the tile proxy is now bypassed
+      // by the map, but this stays as a hard safety net).
+      signal: AbortSignal.timeout(6000),
       next: {
         revalidate: 31536000, // Cache for 1 year
       }

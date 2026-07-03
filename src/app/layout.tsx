@@ -1,4 +1,5 @@
 import type { Metadata, Viewport } from "next";
+import ErrorBoundary from '@/components/ErrorBoundary';
 import "./globals.css";
 
 const SITE_URL = "https://osirisai.live";
@@ -172,8 +173,6 @@ const jsonLd = {
     url: SITE_URL,
   },
 };
-
-import ErrorBoundary from '@/components/ErrorBoundary';
 
 export default function RootLayout({
   children,
