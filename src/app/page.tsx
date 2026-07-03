@@ -198,6 +198,7 @@ export default function Dashboard() {
   const [layerToasts, setLayerToasts] = useState<TimelineLayerToastItem[]>([]);
   const [focusedAxis, setFocusedAxis] = useState<string | null>(null);
   const [focusedAxisBbox, setFocusedAxisBbox] = useState<[number, number, number, number] | null>(null);
+  const [showConfidenceLegends, setShowConfidenceLegends] = useState(true);
 
   const isMobile = useIsMobile();
   const startTime = useRef(Date.now());
@@ -1836,22 +1837,70 @@ export default function Dashboard() {
       <CommandPalette commands={paletteCommands} />
       <KeyboardShortcuts />
 
-      {/* ── CONFLICT EVENTS CONFIDENCE LEGEND ── */}
-      {activeLayers.global_incidents && !isMobile && (
-        <div className="absolute bottom-6 right-12 z-[150] pointer-events-none">
-          <div className="glass-panel px-2 py-1.5 text-[8px] font-mono">
-            <div className="text-[var(--cyan-primary)]/70 mb-1 tracking-wider font-bold">CONFLICT INTEL</div>
-            {([
-              { color: '#FF3D3D', label: 'CONFIRMED',  sub: '\u22652 sources' },
-              { color: '#FF9500', label: 'REPORTED',   sub: '1 source'   },
-              { color: '#FFD54F', label: 'UNVERIFIED', sub: 'Telegram'   },
-            ] as const).map(({ color, label, sub }) => (
-              <div key={label} className="flex items-center gap-1.5 mb-0.5">
-                <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: color }} />
-                <span className="text-white/80">{label}</span>
-                <span className="text-white/30">{sub}</span>
+      {/* ── Confidence Legends (desktop) ── */}
+      {!isMobile && (activeLayers.thermal_aoi || activeLayers.captures || activeLayers.drone_threats || activeLayers.missile_threats) && (
+        <div className="absolute bottom-[88px] right-4 z-[202] pointer-events-auto select-none">
+          <div className="glass-panel p-2 text-[8px] font-mono tracking-widest min-w-[148px]">
+            <button
+              onClick={() => setShowConfidenceLegends(v => !v)}
+              className="flex items-center gap-1 w-full hover:opacity-80 transition-opacity mb-0.5"
+            >
+              <span className="flex-1 text-left text-[7px] tracking-widest text-[var(--gold-primary)]/70 uppercase">Confidence</span>
+              <span className="text-[8px] text-[var(--text-muted)]">{showConfidenceLegends ? '▲' : '▼'}</span>
+            </button>
+            {showConfidenceLegends && (
+              <div className="space-y-2 pt-0.5">
+                {/* Thermal AOI */}
+                {activeLayers.thermal_aoi && (
+                  <div>
+                    <div className="text-[6px] text-[var(--text-muted)] tracking-widest mb-1 uppercase">Thermal AOI</div>
+                    <div className="flex items-center gap-1.5 mb-0.5">
+                      <span className="inline-block w-2.5 h-2.5 rounded-full flex-shrink-0 border border-[#FFD700]" style={{ background: '#FF9500', opacity: 0.9 }} />
+                      <span className="text-[var(--text-secondary)]">Fire / video corroborated</span>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <span className="inline-block w-2.5 h-2.5 rounded-full flex-shrink-0 border-2 border-[#FF8C00] relative overflow-hidden" style={{ background: '#FF9500', opacity: 0.45 }}>
+                        <span className="absolute inset-0 flex items-center justify-center text-[#FF8C00] font-bold" style={{ fontSize: '6px', lineHeight: 1 }}>?</span>
+                      </span>
+                      <span className="text-[var(--text-secondary)] opacity-60">Unconfirmed / single-source</span>
+                    </div>
+                  </div>
+                )}
+                {/* Captures */}
+                {activeLayers.captures && (
+                  <div>
+                    <div className="text-[6px] text-[var(--text-muted)] tracking-widest mb-1 uppercase">Captures</div>
+                    <div className="flex items-center gap-1.5 mb-0.5">
+                      <span className="inline-block w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ background: '#FF3D3D' }} />
+                      <span className="text-[var(--text-secondary)]">RU territorial gain</span>
+                    </div>
+                    <div className="flex items-center gap-1.5 mb-0.5">
+                      <span className="inline-block w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ background: '#2979FF' }} />
+                      <span className="text-[var(--text-secondary)]">UA territorial gain</span>
+                    </div>
+                    <div className="flex items-center gap-1.5 mb-0.5">
+                      <span className="inline-block w-2.5 h-2.5 rounded-full flex-shrink-0 border border-[#FF8C00]" style={{ background: '#FFD700' }} />
+                      <span className="text-[var(--text-secondary)]">Conflicted claim</span>
+                    </div>
+                    <div className="text-[6px] text-[var(--text-muted)] italic">Size = corroboration count</div>
+                  </div>
+                )}
+                {/* Drone / Missile */}
+                {(activeLayers.drone_threats || activeLayers.missile_threats) && (
+                  <div>
+                    <div className="text-[6px] text-[var(--text-muted)] tracking-widest mb-1 uppercase">Drone / Missile</div>
+                    <div className="flex items-center gap-1.5 mb-0.5">
+                      <span className="inline-block w-2.5 h-2.5 rounded-full flex-shrink-0 border-2 border-[#FF1744]" style={{ background: '#CE93D8' }} />
+                      <span className="text-[var(--text-secondary)]">≥2 channels corroborated</span>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <span className="inline-block w-2.5 h-2.5 rounded-full flex-shrink-0 border border-[#E040FB]" style={{ background: '#CE93D8', opacity: 0.65 }} />
+                      <span className="text-[var(--text-secondary)] opacity-65">Single-source sighting</span>
+                    </div>
+                  </div>
+                )}
               </div>
-            ))}
+            )}
           </div>
         </div>
       )}
