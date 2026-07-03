@@ -77,6 +77,10 @@ export default function LiveAlerts({ data, onLocate, onWatchFeed }: LiveAlertsPr
   // Track dismissed IDs in component state so the UI re-renders on dismiss.
   // seenAlertIds (module-level) is the authoritative source; this mirrors it for reactivity.
   const [dismissedIds, setDismissedIds] = useState<Set<string>>(new Set(seenAlertIds));
+  // Compare mode: side-by-side UA vs RU columns (desktop only).
+  const [compareMode, setCompareMode] = useState(false);
+  // Remember the pre-compare maximized state so we can restore it on exit.
+  const [prevMaximized, setPrevMaximized] = useState(false);
 
   const toggleItem = (key: string) =>
     setExpandedItems(prev => {
@@ -93,6 +97,19 @@ export default function LiveAlerts({ data, onLocate, onWatchFeed }: LiveAlertsPr
   const dismissGroup = (groupKey: string, groupAlerts: any[]) => {
     groupAlerts.forEach(a => persistDismissed(hashAlert(a)));
     setDismissedIds(new Set(seenAlertIds));
+  };
+
+  // Toggle compare mode. Entering auto-maximizes for usable column width; exiting restores.
+  const toggleCompare = () => {
+    if (!compareMode) {
+      setPrevMaximized(maximized);
+      setCompareMode(true);
+      setMaximized(true);
+      if (!expanded) setExpanded(true);
+    } else {
+      setCompareMode(false);
+      setMaximized(prevMaximized);
+    }
   };
 
   const BUILTIN_FEEDS = [
@@ -198,6 +215,10 @@ export default function LiveAlerts({ data, onLocate, onWatchFeed }: LiveAlertsPr
   const alertsWithIds = allAlerts.map(a => ({ ...a, _id: hashAlert(a) }));
   const visibleAlerts = alertsWithIds.filter(a => !dismissedIds.has(a._id));
 
+  // UA / RU splits for compare mode — only news articles with a clear side.
+  const uaArticles = visibleAlerts.filter(a => a.type === 'news' && a.side === 'ua');
+  const ruArticles = visibleAlerts.filter(a => a.type === 'news' && a.side === 'ru');
+
   const filtered = filter === 'ukraine' ? visibleAlerts.filter(a => a.type === 'news' && a.side === 'ua') :
     filter === 'russia'  ? visibleAlerts.filter(a => a.type === 'news' && a.side === 'ru') :
     filter === 'world'   ? visibleAlerts.filter(a => a.type === 'news' && a.side === 'world') :
@@ -229,6 +250,99 @@ export default function LiveAlerts({ data, onLocate, onWatchFeed }: LiveAlertsPr
       case 'feed': return Radio;
       default: return Newspaper;
     }
+  };
+
+  // Shared article card renderer — used by both normal grouped list and compare columns.
+  const renderCard = (alert: any) => {
+    const Icon = getIcon(alert.type);
+    const sevColor = RISK_COLORS[alert.severity] || '#FFD700';
+    const isItemExpanded = expandedItems.has(alert._id);
+    const isNews = alert.type === 'news';
+    return (
+      <div
+        key={alert._id}
+        onClick={() => {
+          if (alert.lat !== undefined && alert.lng !== undefined) {
+            onLocate(alert.lat, alert.lng);
+          }
+          if (alert.feedUrl && onWatchFeed) {
+            onWatchFeed(alert.feedUrl, alert.title);
+          }
+        }}
+        className="w-full text-left p-2.5 rounded-lg bg-[#111111]/60 border border-[#2A2A28] hover:bg-[#1A1A1A] transition-all hover:border-[#3A3A38] group cursor-pointer"
+      >
+        <div className="flex items-start gap-2.5">
+          {/* Severity indicator */}
+          <div className="flex-shrink-0 mt-1">
+            <div className="w-2 h-2 rounded-full" style={{ backgroundColor: sevColor, boxShadow: `0 0 6px ${sevColor}60` }} />
+          </div>
+
+          <div className="flex-1 min-w-0">
+            <div className="flex items-start gap-1.5 mb-1">
+              <Icon className="w-3 h-3 flex-shrink-0 mt-0.5" style={{ color: sevColor }} />
+              {isNews ? (
+                <button
+                  onClick={(e) => { e.stopPropagation(); toggleItem(alert._id); }}
+                  className="min-w-0 flex-1 text-left"
+                  title={isItemExpanded ? 'Collapse' : 'Show full text'}
+                >
+                  {alert.title && (
+                    <span className={`block text-[10px] font-mono font-semibold text-[var(--text-primary)] leading-snug ${isItemExpanded ? '' : 'line-clamp-2'}`}>
+                      {alert.title}
+                    </span>
+                  )}
+                  {alert.description && alert.description !== alert.title && (
+                    <span className={`block text-[10px] font-mono text-[var(--text-secondary)] leading-snug mt-0.5 ${isItemExpanded ? '' : 'line-clamp-4'}`}>
+                      {alert.description}
+                    </span>
+                  )}
+                </button>
+              ) : (
+                <span className="text-[10px] font-mono text-[var(--text-primary)] truncate leading-tight">
+                  {alert.title}
+                </span>
+              )}
+            </div>
+            <div className="flex items-center justify-between border-t border-[#2A2A28]/50 pt-1.5 mt-1.5">
+              <div className="flex items-center gap-2">
+                <span className="text-[9px] font-mono text-[#8A8880] uppercase tracking-wider">{alert.source}</span>
+                {alert.time && (
+                  <span className="text-[9px] font-mono text-[#5C5A54] flex items-center gap-1 border-l border-[#2A2A28] pl-2">
+                    <Clock className="w-2.5 h-2.5" />
+                    {new Date(alert.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                  </span>
+                )}
+              </div>
+              {alert.url && (
+                <a
+                  href={alert.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-[8px] font-mono text-[var(--cyan-primary)] hover:underline"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  SOURCE
+                </a>
+              )}
+            </div>
+          </div>
+
+          {/* Right column: fly-to pin + dismiss button */}
+          <div className="flex flex-col items-center gap-1 flex-shrink-0 mt-0.5">
+            {alert.lat !== undefined && (
+              <MapPin className="w-3 h-3 text-[var(--text-muted)] opacity-0 group-hover:opacity-100 transition-opacity" />
+            )}
+            <button
+              onClick={(e) => { e.stopPropagation(); dismissAlert(alert._id); }}
+              title="Dismiss"
+              className="opacity-0 group-hover:opacity-100 transition-opacity text-[#5C5A54] hover:text-[#FF4081]"
+            >
+              <X className="w-2.5 h-2.5" />
+            </button>
+          </div>
+        </div>
+      </div>
+    );
   };
 
   const [mounted, setMounted] = useState(false);
@@ -270,18 +384,26 @@ export default function LiveAlerts({ data, onLocate, onWatchFeed }: LiveAlertsPr
             transition={{ duration: 0.2 }}
             className={`flex flex-col flex-1 min-h-0 ${maximized ? 'bg-[#0a0a09]' : 'bg-transparent'}`}
           >
-            {/* Filters */}
+            {/* Filters / tab bar */}
             <div className={`flex-shrink-0 flex flex-wrap gap-1 ${maximized ? 'px-6 py-4 border-b border-[#2A2A28] bg-[#111111]' : 'px-3 py-2 border-b border-[rgba(255,255,255,0.05)]'}`}>
               {(['all', 'ukraine', 'russia', 'world', 'news', 'quakes'] as const).map(f => {
                 const meta = TAB_META[f] ?? { text: f.toUpperCase() };
+                const isActive = filter === f && !compareMode;
                 return (
                 <button
                   key={f}
-                  onClick={() => setFilter(f)}
-                  className={`px-3 py-1.5 rounded text-[10px] font-mono tracking-wider transition-all ${filter === f ? 'bg-[var(--cyan-primary)]/20 text-[var(--cyan-primary)] border border-[var(--cyan-primary)]/50' : 'text-[#8A8880] border border-transparent hover:text-[#E8E6E0] hover:bg-[#2A2A28]'}`}
+                  onClick={() => {
+                    setFilter(f);
+                    // Clicking a tab also exits compare mode.
+                    if (compareMode) {
+                      setCompareMode(false);
+                      setMaximized(prevMaximized);
+                    }
+                  }}
+                  className={`px-3 py-1.5 rounded text-[10px] font-mono tracking-wider transition-all ${isActive ? 'bg-[var(--cyan-primary)]/20 text-[var(--cyan-primary)] border border-[var(--cyan-primary)]/50' : 'text-[#8A8880] border border-transparent hover:text-[#E8E6E0] hover:bg-[#2A2A28]'}`}
                   style={
-                    filter === f && f === 'ukraine' ? { color: '#FF1744', borderColor: 'rgba(255,23,68,0.5)' } :
-                    filter === f && f === 'russia'  ? { color: '#5B8FF9', borderColor: 'rgba(91,143,249,0.5)' } : undefined
+                    isActive && f === 'ukraine' ? { color: '#FF1744', borderColor: 'rgba(255,23,68,0.5)' } :
+                    isActive && f === 'russia'  ? { color: '#5B8FF9', borderColor: 'rgba(91,143,249,0.5)' } : undefined
                   }
                 >
                   <span className="inline-flex items-center gap-1 leading-none">
@@ -291,169 +413,124 @@ export default function LiveAlerts({ data, onLocate, onWatchFeed }: LiveAlertsPr
                 </button>
                 );
               })}
+              {/* COMPARE toggle — desktop only (hidden on narrow viewports) */}
+              <button
+                onClick={toggleCompare}
+                className={`hidden md:inline-flex px-3 py-1.5 rounded text-[10px] font-mono tracking-wider transition-all items-center gap-1 ${compareMode ? 'bg-[#7c3aed]/20 text-[#a78bfa] border border-[#7c3aed]/50' : 'text-[#8A8880] border border-transparent hover:text-[#E8E6E0] hover:bg-[#2A2A28]'}`}
+              >
+                COMPARE
+              </button>
             </div>
 
-            {/* Alert List */}
-            <div className={`flex-1 overflow-y-auto styled-scrollbar ${maximized ? 'p-6' : 'p-3'}`}>
-              {groups.size === 0 ? (
-                <div className="text-center py-4 text-[10px] font-mono text-[var(--text-muted)]">
-                  No alerts for this filter
+            {compareMode ? (
+              /* ── Compare mode: UA vs RU side-by-side columns ── */
+              <div className={`flex-1 min-h-0 flex flex-row gap-0 ${maximized ? 'px-6 py-4' : 'px-2 py-2'}`}>
+                {/* UA column */}
+                <div className="flex-1 flex flex-col min-w-0 pr-2">
+                  <div className="flex-shrink-0 flex items-center gap-1.5 mb-2 pb-1.5 border-b border-[rgba(255,255,255,0.05)]">
+                    <span className="text-[9px] font-mono tracking-widest" style={{ color: '#FF1744' }}>🇺🇦 UA WAR</span>
+                    <span className="text-[9px] font-mono text-[#5C5A54]">({uaArticles.length})</span>
+                  </div>
+                  <div className="flex-1 overflow-y-auto styled-scrollbar space-y-2 min-h-0">
+                    {uaArticles.length === 0 ? (
+                      <div className="text-center py-4 text-[10px] font-mono text-[var(--text-muted)]">No UA intel</div>
+                    ) : (
+                      uaArticles.map(renderCard)
+                    )}
+                  </div>
                 </div>
-              ) : (
-                <div className="space-y-3">
-                  {Array.from(groups.entries()).map(([gk, groupAlerts]) => (
-                    <div key={gk}>
-                      {/* Group header */}
-                      <div className="flex items-center justify-between mb-1.5 px-1">
-                        <span className="text-[9px] font-mono tracking-widest text-[var(--text-muted)] uppercase">
-                          {GROUP_LABEL[gk] ?? gk.toUpperCase()} ({groupAlerts.length})
-                        </span>
-                        <button
-                          onClick={() => dismissGroup(gk, groupAlerts)}
-                          title="Dismiss all in group"
-                          className="text-[8px] font-mono text-[#5C5A54] hover:text-[#FF4081] transition-colors flex items-center gap-1"
-                        >
-                          <X className="w-2.5 h-2.5" />
-                          DISMISS ALL
-                        </button>
-                      </div>
 
-                      <div className="space-y-2">
-                        {groupAlerts.map((alert) => {
-                          const Icon = getIcon(alert.type);
-                          const sevColor = RISK_COLORS[alert.severity] || '#FFD700';
-                          const isItemExpanded = expandedItems.has(alert._id);
-                          const isNews = alert.type === 'news';
-                          return (
-                            <div
-                              key={alert._id}
-                              onClick={() => {
-                                if (alert.lat !== undefined && alert.lng !== undefined) {
-                                  onLocate(alert.lat, alert.lng);
-                                }
-                                if (alert.feedUrl && onWatchFeed) {
-                                  onWatchFeed(alert.feedUrl, alert.title);
-                                }
-                              }}
-                              className="w-full text-left p-2.5 rounded-lg bg-[#111111]/60 border border-[#2A2A28] hover:bg-[#1A1A1A] transition-all hover:border-[#3A3A38] group cursor-pointer"
-                            >
-                              <div className="flex items-start gap-2.5">
-                                {/* Severity indicator */}
-                                <div className="flex-shrink-0 mt-1">
-                                  <div className="w-2 h-2 rounded-full" style={{ backgroundColor: sevColor, boxShadow: `0 0 6px ${sevColor}60` }} />
-                                </div>
+                {/* Column divider */}
+                <div className="w-px flex-shrink-0 bg-[rgba(255,255,255,0.07)] self-stretch mx-1" />
 
-                                <div className="flex-1 min-w-0">
-                                  <div className="flex items-start gap-1.5 mb-1">
-                                    <Icon className="w-3 h-3 flex-shrink-0 mt-0.5" style={{ color: sevColor }} />
-                                    {isNews ? (
-                                      <button
-                                        onClick={(e) => { e.stopPropagation(); toggleItem(alert._id); }}
-                                        className="min-w-0 flex-1 text-left"
-                                        title={isItemExpanded ? 'Collapse' : 'Show full text'}
-                                      >
-                                        {alert.title && (
-                                          <span className={`block text-[10px] font-mono font-semibold text-[var(--text-primary)] leading-snug ${isItemExpanded ? '' : 'line-clamp-2'}`}>
-                                            {alert.title}
-                                          </span>
-                                        )}
-                                        {alert.description && alert.description !== alert.title && (
-                                          <span className={`block text-[10px] font-mono text-[var(--text-secondary)] leading-snug mt-0.5 ${isItemExpanded ? '' : 'line-clamp-4'}`}>
-                                            {alert.description}
-                                          </span>
-                                        )}
-                                      </button>
-                                    ) : (
-                                      <span className="text-[10px] font-mono text-[var(--text-primary)] truncate leading-tight">
-                                        {alert.title}
-                                      </span>
-                                    )}
-                                  </div>
-                                  <div className="flex items-center justify-between border-t border-[#2A2A28]/50 pt-1.5 mt-1.5">
-                                    <div className="flex items-center gap-2">
-                                      <span className="text-[9px] font-mono text-[#8A8880] uppercase tracking-wider">{alert.source}</span>
-                                      <span className="text-[9px] font-mono text-[#5C5A54] flex items-center gap-1 border-l border-[#2A2A28] pl-2">
-                                          <Clock className="w-2.5 h-2.5" />
-                                          {alert.time
-                                            ? new Date(alert.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-                                            : 'time unknown'}
-                                        </span>
-                                    </div>
-                                    {alert.url && (
-                                      <a
-                                        href={alert.url}
-                                        target="_blank"
-                                        rel="noopener noreferrer"
-                                        className="text-[8px] font-mono text-[var(--cyan-primary)] hover:underline"
-                                        onClick={(e) => e.stopPropagation()}
-                                      >
-                                        SOURCE
-                                      </a>
-                                    )}
-                                  </div>
-                                </div>
-
-                                {/* Right column: fly-to pin + dismiss button */}
-                                <div className="flex flex-col items-center gap-1 flex-shrink-0 mt-0.5">
-                                  {alert.lat !== undefined && (
-                                    <MapPin className="w-3 h-3 text-[var(--text-muted)] opacity-0 group-hover:opacity-100 transition-opacity" />
-                                  )}
-                                  <button
-                                    onClick={(e) => { e.stopPropagation(); dismissAlert(alert._id); }}
-                                    title="Dismiss"
-                                    className="opacity-0 group-hover:opacity-100 transition-opacity text-[#5C5A54] hover:text-[#FF4081]"
-                                  >
-                                    <X className="w-2.5 h-2.5" />
-                                  </button>
-                                </div>
-                              </div>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  ))}
+                {/* RU column */}
+                <div className="flex-1 flex flex-col min-w-0 pl-2">
+                  <div className="flex-shrink-0 flex items-center gap-1.5 mb-2 pb-1.5 border-b border-[rgba(255,255,255,0.05)]">
+                    <span className="text-[9px] font-mono tracking-widest" style={{ color: '#5B8FF9' }}>🇷🇺 RU MILBLOG</span>
+                    <span className="text-[9px] font-mono text-[#5C5A54]">({ruArticles.length})</span>
+                  </div>
+                  <div className="flex-1 overflow-y-auto styled-scrollbar space-y-2 min-h-0">
+                    {ruArticles.length === 0 ? (
+                      <div className="text-center py-4 text-[10px] font-mono text-[var(--text-muted)]">No RU intel</div>
+                    ) : (
+                      ruArticles.map(renderCard)
+                    )}
+                  </div>
                 </div>
-              )}
+              </div>
+            ) : (
+              /* ── Normal mode: grouped alert list + sources directory ── */
+              <div className={`flex-1 overflow-y-auto styled-scrollbar ${maximized ? 'p-6' : 'p-3'}`}>
+                {groups.size === 0 ? (
+                  <div className="text-center py-4 text-[10px] font-mono text-[var(--text-muted)]">
+                    No alerts for this filter
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {Array.from(groups.entries()).map(([gk, groupAlerts]) => (
+                      <div key={gk}>
+                        {/* Group header */}
+                        <div className="flex items-center justify-between mb-1.5 px-1">
+                          <span className="text-[9px] font-mono tracking-widest text-[var(--text-muted)] uppercase">
+                            {GROUP_LABEL[gk] ?? gk.toUpperCase()} ({groupAlerts.length})
+                          </span>
+                          <button
+                            onClick={() => dismissGroup(gk, groupAlerts)}
+                            title="Dismiss all in group"
+                            className="text-[8px] font-mono text-[#5C5A54] hover:text-[#FF4081] transition-colors flex items-center gap-1"
+                          >
+                            <X className="w-2.5 h-2.5" />
+                            DISMISS ALL
+                          </button>
+                        </div>
 
-              {/* ── Channel directory — demoted below the live alert stream ── */}
-              <div className="flex-shrink-0 border-t border-[rgba(255,255,255,0.05)] mt-1">
-                <button
-                  onClick={() => setSourcesOpen(o => !o)}
-                  className="w-full flex items-center justify-between px-3 py-1.5 text-[9px] font-mono text-[#5C5A54] hover:text-[#8A8880] transition-colors"
-                >
-                  <span className="tracking-widest">SOURCES ({BUILTIN_FEEDS.length + TELEGRAM_SOURCES.length})</span>
-                  {sourcesOpen ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
-                </button>
-                {sourcesOpen && (
-                  <div className="px-3 pb-2 grid grid-cols-2 gap-1 max-h-40 overflow-y-auto">
-                    {BUILTIN_FEEDS.map(f => (
-                      <button
-                        key={f.url}
-                        onClick={() => onWatchFeed?.(f.url, f.name)}
-                        className="text-left text-[9px] font-mono text-[#8A8880] hover:text-[var(--cyan-primary)] truncate py-0.5"
-                        title={`${f.name} — ${f.city}, ${f.country}`}
-                      >
-                        {f.name}
-                      </button>
-                    ))}
-                    {TELEGRAM_SOURCES.map(t => (
-                      <a
-                        key={t.channel}
-                        href={`https://t.me/s/${t.channel}`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-[9px] font-mono text-[#8A8880] hover:text-[var(--cyan-primary)] truncate py-0.5"
-                        title={t.name}
-                        onClick={(e) => e.stopPropagation()}
-                      >
-                        {t.name}
-                      </a>
+                        <div className="space-y-2">
+                          {groupAlerts.map(renderCard)}
+                        </div>
+                      </div>
                     ))}
                   </div>
                 )}
+
+                {/* ── Channel directory — demoted below the live alert stream ── */}
+                <div className="flex-shrink-0 border-t border-[rgba(255,255,255,0.05)] mt-1">
+                  <button
+                    onClick={() => setSourcesOpen(o => !o)}
+                    className="w-full flex items-center justify-between px-3 py-1.5 text-[9px] font-mono text-[#5C5A54] hover:text-[#8A8880] transition-colors"
+                  >
+                    <span className="tracking-widest">SOURCES ({BUILTIN_FEEDS.length + TELEGRAM_SOURCES.length})</span>
+                    {sourcesOpen ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+                  </button>
+                  {sourcesOpen && (
+                    <div className="px-3 pb-2 grid grid-cols-2 gap-1 max-h-40 overflow-y-auto">
+                      {BUILTIN_FEEDS.map(f => (
+                        <button
+                          key={f.url}
+                          onClick={() => onWatchFeed?.(f.url, f.name)}
+                          className="text-left text-[9px] font-mono text-[#8A8880] hover:text-[var(--cyan-primary)] truncate py-0.5"
+                          title={`${f.name} — ${f.city}, ${f.country}`}
+                        >
+                          {f.name}
+                        </button>
+                      ))}
+                      {TELEGRAM_SOURCES.map(t => (
+                        <a
+                          key={t.channel}
+                          href={`https://t.me/s/${t.channel}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-[9px] font-mono text-[#8A8880] hover:text-[var(--cyan-primary)] truncate py-0.5"
+                          title={t.name}
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          {t.name}
+                        </a>
+                      ))}
+                    </div>
+                  )}
+                </div>
               </div>
-            </div>
+            )}
           </motion.div>
         )}
       </AnimatePresence>
