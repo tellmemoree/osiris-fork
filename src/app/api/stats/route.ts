@@ -65,7 +65,7 @@ export async function GET(req: Request) {
 
     if (gdeltRes.status === 'fulfilled' && gdeltRes.value.ok) {
         const data = await gdeltRes.value.json();
-        incidents = data.gdelt?.length || 0;
+        incidents = data.events?.length || data.gdelt?.length || 0;
     }
 
     return NextResponse.json({
