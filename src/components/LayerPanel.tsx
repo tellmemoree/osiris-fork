@@ -5,7 +5,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
   Plane, Satellite, Activity, Sun, AlertTriangle, Camera, Flame, Target,
   CloudLightning, Radiation, Tv, Anchor, Ship, Newspaper,
-  Network, Share2, Radio, Siren, Bomb, Zap
+  Network, Share2, Radio, Siren, Bomb, Zap, GitMerge
 } from 'lucide-react';
 
 interface LayerPanelProps {
@@ -109,6 +109,7 @@ const getLayerGroups = (theme: 'core' | 'ghost') => {
       { key: 'missile_threats', label: 'Missile Threats', icon: Zap, color: '#FF4444', dataKey: 'missile_routes' },
       { key: 'power_outages', label: 'Power Outages', icon: Zap, color: '#FFD500', dataKey: 'power_outages' },
       { key: 'oblast_pressure', label: 'Oblast Pressure', icon: Activity, color: '#FF7043', dataKey: 'oblast_pressure' },
+      { key: 'correlated_events', label: 'Threat Timeline', icon: GitMerge, color: '#FF6D00', dataKey: '' },
       { key: 'mig31k', label: 'MiG-31K / Kinzhal Carrier', icon: Plane, color: '#FFAB00', dataKey: '' },
     ],
   },
