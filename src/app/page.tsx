@@ -3,7 +3,7 @@
 import { useEffect, useState, useRef, useCallback, useMemo } from 'react';
 import dynamic from 'next/dynamic';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Layers, BarChart3, Newspaper, Search, X, Globe, MapPinned, Radar, Satellite, Moon, ExternalLink, AlertTriangle, Activity, Database, Wifi, ChevronDown, ChevronUp, Bell, MoreHorizontal, Play, FileText, Network, Crosshair, GitMerge } from 'lucide-react';
+import { Layers, BarChart3, Newspaper, Search, X, Globe, MapPinned, Radar, Satellite, Moon, ExternalLink, AlertTriangle, Activity, Database, Wifi, ChevronDown, ChevronUp, Bell, MoreHorizontal, Play, FileText, Network, Crosshair, GitMerge, Orbit } from 'lucide-react';
 import IntelFeed from '@/components/IntelFeed';
 import MarketsPanel from '@/components/MarketsPanel';
 import ScmPanel from '@/components/ScmPanel';
@@ -1482,7 +1482,7 @@ export default function Dashboard() {
         {/* Threat Fusion HUD toggle */}
         <div className="relative group">
           <button onClick={() => { setShowFusion(f => !f); setShowIntel(false); setShowMarkets(false); setShowAlerts(false); setShowSearch(false); setShowEntityGraph(false); }} className={`w-8 h-8 rounded-full flex items-center justify-center transition-colors ${showFusion ? 'bg-[#FF1744]/20' : 'hover:bg-white/10'}`} title="Global Threat Fusion">
-            <Activity className={`w-4 h-4 ${showFusion ? 'text-[#FF1744]' : 'text-white/60'}`} />
+            <Orbit className={`w-4 h-4 ${showFusion ? 'text-[#FF1744]' : 'text-white/60'}`} />
           </button>
           {showFusion && (
             <div className="absolute right-12 top-0">
