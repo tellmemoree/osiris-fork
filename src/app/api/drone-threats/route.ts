@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { getThreatCorpus, classifyWeapons, matchOblasts, buildRoute, extractUAVCount } from '@/lib/telegram-threats';
-import type { OblastRef, RouteWave } from '@/lib/telegram-threats';
+import type { RouteWave } from '@/lib/telegram-threats';
+import { findAllNamedPlaces } from '@/lib/conflict-geo';
 import { readAlarmHistory, isOblastAlarmed, buildAlarmVectors } from '@/lib/alarm-history';
 import type { AlarmVector } from '@/lib/alarm-history';
 import {
@@ -32,7 +33,7 @@ const CACHE_TTL_MS = 60_000;
 interface DroneEvent {
   oblast:      string;
   regionName:  string;
-  level:       'oblast';
+  level:       'oblast' | 'city';
   alertType:   'DRONE';
   lat:         number;
   lng:         number;
@@ -67,7 +68,11 @@ async function buildDroneResponse(): Promise<DroneResponse> {
   const messages = await getThreatCorpus();
 
   type AggEntry = {
-    ref:        OblastRef;
+    oblast:     string;
+    regionName: string;
+    level:      'oblast' | 'city';
+    lat:        number;
+    lng:        number;
     count:      number;
     latestTs:   number;
     latestText: string;
@@ -76,40 +81,57 @@ async function buildDroneResponse(): Promise<DroneResponse> {
 
   const agg = new Map<string, AggEntry>();
 
+  const bump = (
+    key: string,
+    seed: Pick<AggEntry, 'oblast' | 'regionName' | 'level' | 'lat' | 'lng'>,
+    msg: { ts: number; text: string; channel: string },
+  ) => {
+    const cur = agg.get(key);
+    if (!cur) {
+      agg.set(key, { ...seed, count: 1, latestTs: msg.ts, latestText: msg.text, sources: new Set([msg.channel]) });
+      return;
+    }
+    cur.count += 1;
+    cur.sources.add(msg.channel);
+    if (msg.ts > cur.latestTs) {
+      cur.latestTs   = msg.ts;
+      cur.latestText = msg.text;
+    }
+  };
+
   for (const msg of messages) {
     if (!classifyWeapons(msg.text).includes('DRONE')) continue;
     const refs = matchOblasts(msg.text);
-    if (refs.length === 0) continue;
+    // City/village-level places named in the text — a message naming several
+    // settlements ("...over Vilnyansk, Komyshuvakha, Malokaterynivka...") gets a
+    // marker at each one instead of a single oblast-centroid dot for all of them.
+    const places = findAllNamedPlaces(msg.text);
+    if (refs.length === 0 && places.length === 0) continue;
 
-    for (const ref of refs) {
-      const cur = agg.get(ref.oblast);
-      if (!cur) {
-        agg.set(ref.oblast, {
-          ref,
-          count:      1,
-          latestTs:   msg.ts,
-          latestText: msg.text,
-          sources:    new Set([msg.channel]),
-        });
-      } else {
-        cur.count += 1;
-        cur.sources.add(msg.channel);
-        if (msg.ts > cur.latestTs) {
-          cur.latestTs   = msg.ts;
-          cur.latestText = msg.text;
-        }
+    if (places.length > 0) {
+      // Oblast label is display context only (popup subtitle) — falls back to the
+      // place name itself when no oblast token matched (small villages not in
+      // matchOblasts's sparser per-oblast token list still get a real city pin).
+      const oblastLabel = refs[0]?.oblast ?? places[0].name;
+      for (const place of places) {
+        const [lat, lng] = place.coords; // conflict-geo PLACE_COORDS is [lat, lng]
+        bump(`city:${place.name}`, { oblast: oblastLabel, regionName: place.name, level: 'city', lat, lng }, msg);
+      }
+    } else {
+      for (const ref of refs) {
+        bump(`oblast:${ref.oblast}`, { oblast: ref.oblast, regionName: ref.oblast, level: 'oblast', lat: ref.coords[1], lng: ref.coords[0] }, msg);
       }
     }
   }
 
   const threats: DroneEvent[] = Array.from(agg.values())
     .map((a) => ({
-      oblast:     a.ref.oblast,
-      regionName: a.ref.oblast,
-      level:      'oblast' as const,
+      oblast:     a.oblast,
+      regionName: a.regionName,
+      level:      a.level,
       alertType:  'DRONE'  as const,
-      lng:        a.ref.coords[0],
-      lat:        a.ref.coords[1],
+      lat:        a.lat,
+      lng:        a.lng,
       count:      a.count,
       startedAt:  new Date(a.latestTs).toISOString(),
       text:       a.latestText.length > 220 ? a.latestText.slice(0, 220) + '…' : a.latestText,
