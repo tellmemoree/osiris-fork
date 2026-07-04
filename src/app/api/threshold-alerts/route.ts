@@ -18,6 +18,11 @@ const CACHE_TTL = 300_000; // 5 min
 let cache: ThresholdAlert[] | null = null;
 let cacheTs = 0;
 
+// Stable per-id first-seen time so an alert's displayed timestamp reflects when
+// the condition was first detected, not "now" on every cache-miss regeneration
+// (rules recompute `timestamp: new Date().toISOString()` fresh each cycle).
+const firstSeenAt = new Map<string, string>();
+
 // Track which alert IDs have been pushed to Telegram this session (reset every 24h)
 const sentIds = new Set<string>();
 setInterval(() => sentIds.clear(), 86_400_000);
@@ -190,6 +195,22 @@ export async function GET(req: NextRequest) {
     ...ruleFirmsAirfield(aois),
     ...ruleFirmsStrikeConfirmed(aois),
   ];
+
+  // Pin each alert's timestamp to when its id was first seen, not this cycle's
+  // regeneration time. Ids no longer present get pruned so a genuinely new
+  // occurrence later starts a fresh clock.
+  const liveIds = new Set(alerts.map(a => a.id));
+  for (const id of firstSeenAt.keys()) {
+    if (!liveIds.has(id)) firstSeenAt.delete(id);
+  }
+  for (const alert of alerts) {
+    const seen = firstSeenAt.get(alert.id);
+    if (seen) {
+      alert.timestamp = seen;
+    } else {
+      firstSeenAt.set(alert.id, alert.timestamp);
+    }
+  }
 
   // Push new alerts to Telegram (fire-and-forget)
   for (const alert of alerts) {
