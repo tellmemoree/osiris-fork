@@ -113,21 +113,49 @@ const CYR_ALIASES: Record<string, string[]> = {
   'sloviansk':      ['слов\'янськ', 'славянск'],
 };
 
+// Directional-target framing ("прорив на Слов'янськ" / "шлях на X") names where an
+// advance is HEADED, not what was actually captured — "Костянтинівка звільнена:
+// Путіну доповіли про прорив на Слов'янськ" means Kostiantynivka fell; Sloviansk is
+// just the stated next objective. A place mention immediately governed by this kind
+// of phrase is excluded from primary-place candidacy.
+const DIRECTIONAL_TARGET_RE = /(прорив|прорыв|шлях|путь|дорога|наступ\w*|вихід|выход|відкрива\w*|открыва\w*)[^.!?]{0,20}(на|до|к)\s*$/i;
+function isDirectionalTarget(lowerTitle: string, matchIndex: number): boolean {
+  const before = lowerTitle.slice(Math.max(0, matchIndex - 60), matchIndex);
+  return DIRECTIONAL_TARGET_RE.test(before);
+}
+
 // Return only the PRIMARY place centroid for an article. Using all places[] would
 // scatter markers to every geographic mention in the body — comparison cities, political
 // context, Kyiv-as-capital references — none of which represent the claimed territory.
-// Primary = first place whose name appears in the title (Latin or Cyrillic alias);
-// fall back to places[0] or jittered coords if no title match is found.
+// Primary = the place named EARLIEST in the title (Latin or Cyrillic alias) among
+// non-directional-target mentions — NOT the first match in place_names array order,
+// which reflects gazetteer definition order, not where the name actually sits in the
+// text (this previously picked whichever gazetteer key happened to be defined first
+// among two places that both appear in the title). Falls back to places[0]/coords
+// when nothing in the title matches at all.
 function allCentroids(item: NewsItem): [number, number][] {
   const { places, place_names, title, coords } = item;
   if (places && place_names && places.length === place_names.length && places.length > 0) {
     const lowerTitle = (title || '').toLowerCase();
-    const titleMatch = place_names.findIndex(name => {
-      if (lowerTitle.includes(name.toLowerCase())) return true;
-      // Cyrillic titles: check aliases for this Latin gazetteer key
-      return (CYR_ALIASES[name.toLowerCase()] || []).some(cyr => lowerTitle.includes(cyr));
+    const candidates: { idx: number; place: [number, number]; directional: boolean }[] = [];
+    place_names.forEach((name, i) => {
+      const lowerName = name.toLowerCase();
+      const needles = [lowerName, ...(CYR_ALIASES[lowerName] || [])];
+      for (const needle of needles) {
+        const idx = lowerTitle.indexOf(needle);
+        if (idx !== -1) {
+          candidates.push({ idx, place: places[i], directional: isDirectionalTarget(lowerTitle, idx) });
+          break; // one candidate per place — first alias hit is enough
+        }
+      }
     });
-    if (titleMatch !== -1) return [places[titleMatch]];
+    // Prefer places NOT named as a directional target; among those, earliest mention wins.
+    const nonDirectional = candidates.filter(c => !c.directional);
+    const pool = nonDirectional.length ? nonDirectional : candidates;
+    if (pool.length) {
+      pool.sort((a, b) => a.idx - b.idx);
+      return [pool[0].place];
+    }
   }
   const primary = places?.[0] ?? coords;
   return primary ? [primary] : [];

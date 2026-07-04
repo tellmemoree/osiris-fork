@@ -71,7 +71,7 @@ const REGION_STEMS: Array<[string, string]> = [
   ['одещин',            'Odeska Oblast'],     // Одещині
   ['одес',              'Odeska Oblast'],
   ['полтав',            'Poltavska Oblast'],
-  ['рівн',              'Rivnenska Oblast'],
+  ['рівнен',            'Rivnenska Oblast'],  // NOT bare 'рівн' — collides with 'рівня'/'рівний' (level/equal)
   ['сумщин',            'Sumska Oblast'],     // Сумщині
   ['сумськ',            'Sumska Oblast'],
   ['суми',              'Sumska Oblast'],

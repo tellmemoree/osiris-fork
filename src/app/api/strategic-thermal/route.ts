@@ -137,6 +137,9 @@ const SITES: Site[] = [
   { id: 'oil-novorossiysk', name: 'Novorossiysk (Sheskharis oil terminal)', category: 'oil', lat: 44.70, lng: 37.80 },
   { id: 'oil-tuapse', name: 'Tuapse refinery', category: 'oil', lat: 44.10, lng: 39.08 },
   { id: 'oil-ustluga', name: 'Ust-Luga oil terminal (Baltic)', category: 'oil', lat: 59.67, lng: 28.27 },
+  // Distinct from naval-kronstadt below — the terminal sits ~18km away, outside
+  // that site's SITE_RADIUS_KM, so it needs its own entry (recurring target, hit repeatedly 2026).
+  { id: 'oil-stpetersburg', name: 'St. Petersburg oil terminal (Baltic)', category: 'oil', lat: 59.868, lng: 30.206 },
   { id: 'oil-ryazan', name: 'Ryazan refinery', category: 'oil', lat: 54.61, lng: 39.69 },
   { id: 'oil-volgograd', name: 'Volgograd (Lukoil) refinery', category: 'oil', lat: 48.62, lng: 44.42 },
   { id: 'oil-novoshakhtinsk', name: 'Novoshakhtinsk refinery', category: 'oil', lat: 47.78, lng: 39.93 },
@@ -410,10 +413,14 @@ function isStrikeRelated(item: NewsItem): boolean {
 // only: deliberately omit bare "occupied"/"наступ" (the latter collides with
 // "наступний"/next — see ARCHITECTURE.md) so genuine strike reports ("...depot in
 // the occupied Donetsk region") are NOT dropped.
+// 'наступа' IS safe to add (unlike bare 'наступ'): the verb stem наступа-
+// (наступаю/наступають/наступаючими) never appears in "наступний" (next) —
+// they diverge at the 7th char (п vs н) — so it catches maneuver-warfare
+// participles ("наступаючими підрозділами") without the "next" collision.
 const ADVANCE_TERMS = [
   'liberat', 'recaptur', 'took control', 'under control', 'gained control', 'overran',
   'overrun', 'fallen to', 'fell to', 'seized by', 'stormed',
-  'освобод', 'под контроль', 'захват', 'продвин', 'штурм', 'прорвали', 'наступают',
+  'освобод', 'под контроль', 'захват', 'продвин', 'штурм', 'прорвали', 'наступают', 'наступа',
   'звільн', 'під контроль', 'захопл', 'просун',
   'встановив контрол', 'встановлено контрол', 'зайняли', 'зайняв', 'штурмують',
   'відійшли', 'залишили', 'ворог увійшов',
@@ -421,6 +428,22 @@ const ADVANCE_TERMS = [
 function isTerritorialAdvance(item: NewsItem): boolean {
   const t = `${item.title || ''} ${item.description || ''}`.toLowerCase();
   return ADVANCE_TERMS.some(w => t.includes(w));
+}
+
+// Found/disposed unexploded ordnance ("grenade found in the street, sappers
+// detonated it on site") uses the same vocabulary as a strike report — 'підрив'
+// (detonation) above literally matches a controlled EOD demolition — but it is a
+// civilian safety incident, not a strike. Exclude it.
+const ORDNANCE_DISPOSAL_STEMS = [
+  'виявили гранат', 'виявлено гранат', 'виявили вибухів', 'виявлено вибухів',
+  'знайшли гранат', 'знайдено гранат', 'знайдено снаряд', 'знайшли снаряд',
+  'піротехнік', 'вибухотехнік', 'знешкодил', 'знешкоджен',
+  'обнаружили гранат', 'обнаружена граната', 'сапёры', 'саперы',
+  'unexploded ordnance', 'bomb disposal', 'bomb squad', 'controlled detonation',
+];
+function isOrdnanceDisposal(item: NewsItem): boolean {
+  const t = `${item.title || ''} ${item.description || ''}`.toLowerCase();
+  return ORDNANCE_DISPOSAL_STEMS.some(w => t.includes(w));
 }
 
 // Air-defense / interception reports ("326 UAVs shot down by ПВО") pass
@@ -442,6 +465,21 @@ const GROUND_IMPACT_STEMS = [
 function isInterceptionOnly(item: NewsItem): boolean {
   const t = `${item.title || ''} ${item.description || ''}`.toLowerCase();
   if (!INTERCEPT_STEMS.some(w => t.includes(w))) return false;
+  return !GROUND_IMPACT_STEMS.some(w => t.includes(w));
+}
+
+// Retrospective/analysis pieces ("fuel shortages caused by systemic drone strikes")
+// use strike vocabulary to describe a cumulative economic consequence, not a fresh
+// incident — they should not spawn a strike marker off an unrelated ambient fire.
+// Only excluded when the article carries NO ground-impact evidence itself; a piece
+// that explains context AND reports today's fire/explosion still gets through.
+const CONSEQUENCE_STEMS = [
+  'внаслідок', 'у результаті', 'в результате', 'вследствие',
+  'спричинен', 'спричинил', 'вызван', 'вызвал', 'дефіцит', 'дефицит',
+];
+function isConsequenceOnly(item: NewsItem): boolean {
+  const t = `${item.title || ''} ${item.description || ''}`.toLowerCase();
+  if (!CONSEQUENCE_STEMS.some(w => t.includes(w))) return false;
   return !GROUND_IMPACT_STEMS.some(w => t.includes(w));
 }
 
@@ -594,10 +632,12 @@ async function computeThermal(req: Request): Promise<ThermalResponse> {
     const tgCorpusMerged: TgMessage[] = [...tgCorpus, ...tgReportCorpus];
 
     // Pre-filter Telegram corpus: keep only strike-related messages that are not
-    // territorial-advance or interception-only reports (same gates as RSS news).
+    // territorial-advance, interception-only, ordnance-disposal, or consequence-only
+    // reports (same gates as RSS news).
     const tgStrike = tgCorpusMerged.filter(msg => {
       const fake: NewsItem = { title: msg.text.slice(0, 120), description: msg.text };
-      return isStrikeRelated(fake) && !isTerritorialAdvance(fake) && !isInterceptionOnly(fake);
+      return isStrikeRelated(fake) && !isTerritorialAdvance(fake) && !isInterceptionOnly(fake)
+        && !isOrdnanceDisposal(fake) && !isConsequenceOnly(fake);
     });
 
     const aois = [];
@@ -648,7 +688,8 @@ async function computeThermal(req: Request): Promise<ThermalResponse> {
     };
     const newsByCell = new Map<string, NewsAoi>();
     for (const n of allNews) {
-      if (!isStrikeRelated(n) || isTerritorialAdvance(n) || isInterceptionOnly(n)) continue;
+      if (!isStrikeRelated(n) || isTerritorialAdvance(n) || isInterceptionOnly(n)
+        || isOrdnanceDisposal(n) || isConsequenceOnly(n)) continue;
       // n.places = ALL cities the article names (gazetteer scan of full body) — often
       // includes incidental context cities, not just the actual strike location.
       // n.coords = primary / most-specific location (single best match).

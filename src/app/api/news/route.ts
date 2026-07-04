@@ -150,6 +150,8 @@ const KEYWORD_COORDS: Record<string, [number, number]> = {
   'tel aviv': [32.085, 34.781], 'jerusalem': [31.769, 35.214], 'beirut': [33.888, 35.495],
   'damascus': [33.513, 36.292], 'tehran': [35.689, 51.389], 'sanaa': [15.369, 44.191],
   'red sea': [20.284, 38.512], 'saint petersburg': [59.931, 30.361], 'novorossiysk': [44.724, 37.768],
+  // EN wire copy almost always abbreviates — 'saint petersburg' alone never matches it.
+  'st. petersburg': [59.931, 30.361], 'st petersburg': [59.931, 30.361],
   // Russian cities, border oblasts and military airfields (high OSINT value —
   // frequent drone-strike targets). Both Latin and Cyrillic so RU-language
   // Telegram posts geolocate as well as English RSS.
@@ -218,6 +220,7 @@ const KEYWORD_COORDS: Record<string, [number, number]> = {
   'костянтинівк': [48.528, 37.700], 'константиновк': [48.528, 37.700],
   'курахов': [47.988, 37.272], 'новосілк': [47.844, 36.797], 'новоселк': [47.844, 36.797],
   'оріхів': [47.568, 35.784], 'гуляйпол': [47.662, 36.264],
+  'вільнянськ': [47.941, 35.436], 'вильнянск': [47.941, 35.436],
   'роботин': [47.455, 35.843], 'работин': [47.455, 35.843],
   'енергодар': [47.500, 34.655], 'энергодар': [47.500, 34.655],
   'каховк': [46.759, 33.388], 'токмак': [47.255, 35.706],
