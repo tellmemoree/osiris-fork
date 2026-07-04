@@ -2788,7 +2788,7 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
     for (const wave of waves) {
       const allWps: any[] = wave.waypoints || [];
       const wps = alarmedOblasts
-        ? allWps.filter((w: any) => alarmedOblasts.has(w.oblast.toLowerCase()))
+        ? allWps.filter((w: any) => alarmedOblasts.has(w.oblast.toLowerCase()) || w.neptunConfirmed || w.alarmConfirmed)
         : allWps;
       if (wps.length === 0) continue;
       if (wps.length >= 2) {
