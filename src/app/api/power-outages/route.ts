@@ -106,7 +106,7 @@ const OBLAST_COORDS: Record<string, [number, number]> = {
   'Zakarpatska Oblast':      [48.620,  23.297],
   'Zaporizka Oblast':        [47.838,  35.139],
   'Ivano-Frankivska Oblast': [48.922,  24.711],
-  'Kyivska Oblast':          [50.450,  30.523],
+  'Kyivska Oblast':          [50.900,  31.200],
   'Kyiv City':               [50.452,  30.518],
   'Kirovohradska Oblast':    [48.508,  32.262],
   'Luhanska Oblast':         [48.566,  39.300],
