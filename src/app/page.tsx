@@ -560,7 +560,16 @@ export default function Dashboard() {
     drone_threats: () => fetchEndpoint('/api/drone-threats', d => ({ drone_threats: d.threats, drone_waves: d.waves, drone_uav_count: d.uav_count ?? 0, alarm_vectors: d.alarm_vectors ?? [] })).then(() => setLayerTimestamps(p => ({ ...p, drone_threats: Date.now() }))),
     missile_threats: () => fetchEndpoint('/api/missile-threats', d => ({ missile_routes: d.routes, missile_alarm_vectors: d.alarm_vectors })).then(() => setLayerTimestamps(p => ({ ...p, missile_threats: Date.now() }))),
     ru_air_raids: () => fetchEndpoint('/api/ru-air-raids', d => ({ ru_air_raids: d.events })),
-    frontlines: () => fetchEndpoint('/api/frontlines?delta=7', (d: any) => ({ frontlines: d.frontlines?.features || [], frontline_delta: d.delta_frontlines?.features || [] })).then(() => setLayerTimestamps(p => ({ ...p, frontlines: Date.now() }))),
+    frontlines: () => {
+      // Fetch current frontline overlay
+      fetchEndpoint('/api/frontlines', d => ({ frontlines: d.frontlines?.features || [] })).then(() => setLayerTimestamps(p => ({ ...p, frontlines: Date.now() })));
+      // Fetch directional 7-day delta (RU gain / UA gain)
+      fetchEndpoint('/api/frontlines?delta=7', d => ({
+        frontline_ru_gain: d.ru_gain?.features || [],
+        frontline_ua_gain: d.ua_gain?.features || [],
+        frontline_delta_compare_date: d.actual_compare_date || d.compare_date || null,
+      }));
+    },
     captures: () => fetchEndpoint('/api/captures', d => ({ captures: d.captures })).then(() => setLayerTimestamps(p => ({ ...p, captures: Date.now() }))),
     air_quality: () => fetchEndpoint('/api/air-quality', d => ({ air_quality: d.stations })),
     thermal_aoi: () => fetchEndpoint('/api/strategic-thermal', d => ({ thermal_aoi: d.aois })),
@@ -709,7 +718,12 @@ export default function Dashboard() {
       intervals.push(setInterval(() => fetchEndpoint('/api/power-outages', d => ({ power_outages: d.outages })), 300000)); // 5 min
     }
     if (activeLayers.frontlines) {
-      intervals.push(setInterval(() => fetchEndpoint('/api/frontlines?delta=7', (d: any) => ({ frontlines: d.frontlines?.features || [], frontline_delta: d.delta_frontlines?.features || [] })).then(() => setLayerTimestamps(p => ({ ...p, frontlines: Date.now() }))), 1800000)); // 30 min
+      intervals.push(setInterval(() => fetchEndpoint('/api/frontlines', d => ({ frontlines: d.frontlines?.features || [] })).then(() => setLayerTimestamps(p => ({ ...p, frontlines: Date.now() }))), 1800000)); // 30 min
+      intervals.push(setInterval(() => fetchEndpoint('/api/frontlines?delta=7', d => ({
+        frontline_ru_gain: d.ru_gain?.features || [],
+        frontline_ua_gain: d.ua_gain?.features || [],
+        frontline_delta_compare_date: d.actual_compare_date || d.compare_date || null,
+      })), 1800000)); // 30 min
     }
     if (activeLayers.air_quality) {
       intervals.push(setInterval(() => fetchEndpoint('/api/air-quality', d => ({ air_quality: d.stations })), 3600000)); // 1 h

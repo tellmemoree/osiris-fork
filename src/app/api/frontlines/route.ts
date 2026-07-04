@@ -1,18 +1,20 @@
 
 import { NextResponse } from 'next/server';
-import fs from 'fs';
+import { promises as fs } from 'fs';
+import os from 'os';
 import path from 'path';
 import { fetchDeepState, extractFeatures, type GeoJSONFeatureCollection } from '@/lib/deepstate';
+import { computeFootprintDelta } from '@/lib/frontline-delta';
+import type { FeatureCollection } from 'geojson';
 
 export const dynamic = 'force-dynamic';
 
 // Cache TTL: 30 minutes — frontlines update at most a few times per day.
-const SNAPSHOTS_DIR = path.join(process.env.HOME ?? '/root', '.osiris-data', 'frontline-snapshots');
-const SNAPSHOT_MAX_AGE_DAYS = 35;
-
 let staleCache: { frontlines: GeoJSONFeatureCollection; timestamp: string } | null = null;
 
 // Militaryland (militaryland.net/ua/front-line/geojson) returns 404 — endpoint is dead.
+
+const SNAPSHOT_DIR = path.join(os.homedir(), '.osiris-data', 'frontline-snapshots');
 
 function parseStatus(name: string): { statusKey: string; statusLabel: string } {
   if (name.includes('geoJSON.status.dismissed_at')) return { statusKey: 'dismissed_at', statusLabel: 'Liberated' };
@@ -70,58 +72,57 @@ function enrichFeatures(features: unknown[]): unknown[] {
   });
 }
 
-/**
- * Write today's snapshot to ~/.osiris-data/frontline-snapshots/YYYY-MM-DD.json.
- * Only writes if the file doesn't already exist.
- * Prunes files older than SNAPSHOT_MAX_AGE_DAYS days when writing.
- */
-function maybeWriteSnapshot(frontlines: GeoJSONFeatureCollection): void {
+/** Save today's snapshot to SNAPSHOT_DIR/YYYY-MM-DD.json */
+async function saveSnapshot(fc: FeatureCollection, date: string): Promise<void> {
   try {
-    fs.mkdirSync(SNAPSHOTS_DIR, { recursive: true });
-
-    const today = new Date().toISOString().slice(0, 10);
-    const todayFile = path.join(SNAPSHOTS_DIR, `${today}.json`);
-
-    if (fs.existsSync(todayFile)) return;
-
-    // Prune old snapshots before writing.
-    try {
-      const cutoff = Date.now() - SNAPSHOT_MAX_AGE_DAYS * 86_400_000;
-      const entries = fs.readdirSync(SNAPSHOTS_DIR);
-      for (const entry of entries) {
-        if (!/^\d{4}-\d{2}-\d{2}\.json$/.test(entry)) continue;
-        const dateStr = entry.slice(0, 10);
-        const entryMs = new Date(dateStr).getTime();
-        if (!isNaN(entryMs) && entryMs < cutoff) {
-          try { fs.unlinkSync(path.join(SNAPSHOTS_DIR, entry)); } catch { /* ignore */ }
-        }
-      }
-    } catch { /* ignore cleanup errors */ }
-
-    fs.writeFileSync(todayFile, JSON.stringify(frontlines));
-  } catch { /* never crash the request on snapshot IO */ }
+    await fs.mkdir(SNAPSHOT_DIR, { recursive: true });
+    const file = path.join(SNAPSHOT_DIR, `${date}.json`);
+    await fs.writeFile(file, JSON.stringify(fc), 'utf8');
+  } catch (e) {
+    console.warn('[OSIRIS] frontlines: snapshot write failed', e instanceof Error ? e.message : e);
+  }
 }
 
-/**
- * Load the snapshot from deltaDays ago, if it exists.
- * Returns null when the file is missing or unparseable.
- */
-function loadDeltaSnapshot(deltaDays: number): GeoJSONFeatureCollection | null {
+/** Load a snapshot for a given date. Returns null if not found. */
+async function loadSnapshot(date: string): Promise<FeatureCollection | null> {
   try {
-    const pastDate = new Date(Date.now() - deltaDays * 86_400_000);
-    const pastFile = path.join(SNAPSHOTS_DIR, `${pastDate.toISOString().slice(0, 10)}.json`);
-    if (fs.existsSync(pastFile)) {
-      try { return JSON.parse(fs.readFileSync(pastFile, 'utf8')); } catch { /* unparseable */ }
-    }
-  } catch { /* ignore */ }
+    const file = path.join(SNAPSHOT_DIR, `${date}.json`);
+    const txt = await fs.readFile(file, 'utf8');
+    const fc = JSON.parse(txt);
+    if (fc?.type === 'FeatureCollection' && Array.isArray(fc.features)) return fc as FeatureCollection;
+  } catch { /* file missing or parse error */ }
   return null;
 }
 
-export async function GET(request: Request) {
-  // Parse ?delta=N (1–90 days).
-  const url = new URL(request.url);
-  const deltaParam = url.searchParams.get('delta');
-  const deltaDays = deltaParam ? Math.min(90, Math.max(1, parseInt(deltaParam, 10))) : null;
+/**
+ * Find the most recent snapshot at or before `targetDate` (YYYY-MM-DD).
+ * Returns { date, fc } or null if no snapshot exists.
+ */
+async function nearestSnapshot(targetDate: string): Promise<{ date: string; fc: FeatureCollection } | null> {
+  let files: string[];
+  try {
+    files = await fs.readdir(SNAPSHOT_DIR);
+  } catch { return null; }
+
+  // Only YYYY-MM-DD.json files
+  const candidates = files
+    .filter(f => /^\d{4}-\d{2}-\d{2}\.json$/.test(f))
+    .map(f => f.replace('.json', ''))
+    .filter(d => d <= targetDate)
+    .sort()
+    .reverse(); // newest first
+
+  for (const date of candidates) {
+    const fc = await loadSnapshot(date);
+    if (fc) return { date, fc };
+  }
+  return null;
+}
+
+export async function GET(req: Request) {
+  const { searchParams } = new URL(req.url);
+  const deltaParam = searchParams.get('delta');
+  const deltaDays = deltaParam ? parseInt(deltaParam, 10) : NaN;
 
   let deepStateData: GeoJSONFeatureCollection;
   try {
@@ -130,7 +131,7 @@ export async function GET(request: Request) {
     console.error('Frontlines fetch error (DeepState):', reason);
     if (staleCache) {
       return NextResponse.json(
-        { ...staleCache, sources: ['DeepState'], stale: true, delta_frontlines: null },
+        { ...staleCache, sources: ['DeepState'], stale: true },
         { headers: { 'Cache-Control': 'no-store', 'X-Stale': 'true' } }
       );
     }
@@ -155,20 +156,59 @@ export async function GET(request: Request) {
     features: filtered,
   };
 
+  const today = new Date().toISOString().slice(0, 10);
   const timestamp = new Date().toISOString();
   staleCache = { frontlines, timestamp };
 
-  // Persist today's snapshot; prunes files older than 35 days.
-  maybeWriteSnapshot(frontlines);
+  // Persist today's snapshot (non-blocking)
+  const currentFC: FeatureCollection = {
+    type: 'FeatureCollection',
+    features: enriched as any[],
+  };
+  saveSnapshot(currentFC, today).catch(() => {});
 
-  // Load historical snapshot for delta comparison.
-  const delta_frontlines: GeoJSONFeatureCollection | null =
-    deltaDays !== null ? loadDeltaSnapshot(deltaDays) : null;
+  // ── Delta mode: return directional RU/UA gain polygons ──
+  if (!isNaN(deltaDays) && deltaDays > 0) {
+    const targetDate = new Date(today + 'T00:00:00Z');
+    targetDate.setUTCDate(targetDate.getUTCDate() - deltaDays);
+    const targetDateStr = targetDate.toISOString().slice(0, 10);
 
+    const snapshotResult = await nearestSnapshot(targetDateStr);
+    if (!snapshotResult) {
+      return NextResponse.json(
+        {
+          ru_gain: { type: 'FeatureCollection', features: [] },
+          ua_gain: { type: 'FeatureCollection', features: [] },
+          compare_date: targetDateStr,
+          actual_compare_date: null,
+          note: `No snapshot available for ${targetDateStr} or earlier.`,
+          sources: ['DeepState'],
+          timestamp,
+        },
+        { headers: { 'Cache-Control': 'public, s-maxage=1800, stale-while-revalidate=3600' } }
+      );
+    }
+
+    const { date: actualDate, fc: pastFC } = snapshotResult;
+    const delta = computeFootprintDelta(currentFC, pastFC, actualDate);
+
+    return NextResponse.json(
+      {
+        ru_gain: delta.ru_gain,
+        ua_gain: delta.ua_gain,
+        compare_date: targetDateStr,
+        actual_compare_date: actualDate,
+        sources: ['DeepState'],
+        timestamp,
+      },
+      { headers: { 'Cache-Control': 'public, s-maxage=1800, stale-while-revalidate=3600' } }
+    );
+  }
+
+  // ── Standard mode: return full frontline FeatureCollection ──
   return NextResponse.json(
     {
       frontlines,
-      delta_frontlines,
       sources: ['DeepState'],
       timestamp,
     },
