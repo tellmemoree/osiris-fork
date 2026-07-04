@@ -46,10 +46,11 @@ interface MissileRoute {
 }
 
 interface MissileResponse {
-  routes:       MissileRoute[];
-  total:        number;
-  window_hours: number;
-  timestamp:    string;
+  routes:        MissileRoute[];
+  alarm_vectors: RouteWave[];   // all waves flattened across all missile types for propagation-arrow rendering
+  total:         number;
+  window_hours:  number;
+  timestamp:     string;
 }
 
 let cached:   MissileResponse | null = null;
@@ -108,9 +109,10 @@ async function buildMissileResponse(): Promise<MissileResponse> {
 
   return {
     routes,
-    total:        routes.length,
-    window_hours: WINDOW_HOURS,
-    timestamp:    new Date().toISOString(),
+    alarm_vectors: routes.flatMap(r => r.waves),
+    total:         routes.length,
+    window_hours:  WINDOW_HOURS,
+    timestamp:     new Date().toISOString(),
   };
 }
 

@@ -558,7 +558,7 @@ export default function Dashboard() {
     kab_threats: () => fetchEndpoint('/api/kab-threats', d => ({ kab_threats: d.threats })).then(() => setLayerTimestamps(p => ({ ...p, kab_threats: Date.now() }))),
     weapon_threats: () => fetchEndpoint('/api/weapon-threats', d => ({ weapon_threats: d.threats })).then(() => setLayerTimestamps(p => ({ ...p, weapon_threats: Date.now() }))),
     drone_threats: () => fetchEndpoint('/api/drone-threats', d => ({ drone_threats: d.threats, drone_waves: d.waves, drone_uav_count: d.uav_count ?? 0, alarm_vectors: d.alarm_vectors ?? [] })).then(() => setLayerTimestamps(p => ({ ...p, drone_threats: Date.now() }))),
-    missile_threats: () => fetchEndpoint('/api/missile-threats', d => ({ missile_routes: d.routes })).then(() => setLayerTimestamps(p => ({ ...p, missile_threats: Date.now() }))),
+    missile_threats: () => fetchEndpoint('/api/missile-threats', d => ({ missile_routes: d.routes, missile_alarm_vectors: d.alarm_vectors })).then(() => setLayerTimestamps(p => ({ ...p, missile_threats: Date.now() }))),
     ru_air_raids: () => fetchEndpoint('/api/ru-air-raids', d => ({ ru_air_raids: d.events })),
     frontlines: () => fetchEndpoint('/api/frontlines?delta=7', (d: any) => ({ frontlines: d.frontlines?.features || [], frontline_delta: d.delta_frontlines?.features || [] })).then(() => setLayerTimestamps(p => ({ ...p, frontlines: Date.now() }))),
     captures: () => fetchEndpoint('/api/captures', d => ({ captures: d.captures })).then(() => setLayerTimestamps(p => ({ ...p, captures: Date.now() }))),
@@ -703,7 +703,7 @@ export default function Dashboard() {
       intervals.push(setInterval(() => fetchEndpoint('/api/drone-threats', d => ({ drone_threats: d.threats, drone_waves: d.waves, drone_uav_count: d.uav_count ?? 0, alarm_vectors: d.alarm_vectors ?? [] })).then(() => setLayerTimestamps(p => ({ ...p, drone_threats: Date.now() }))), 60000)); // 1 min — "last 1.5h" data
     }
     if (activeLayers.missile_threats) {
-      intervals.push(setInterval(() => fetchEndpoint('/api/missile-threats', d => ({ missile_routes: d.routes })).then(() => setLayerTimestamps(p => ({ ...p, missile_threats: Date.now() }))), 60000)); // 1 min — "last 1.5h" data
+      intervals.push(setInterval(() => fetchEndpoint('/api/missile-threats', d => ({ missile_routes: d.routes, missile_alarm_vectors: d.alarm_vectors })).then(() => setLayerTimestamps(p => ({ ...p, missile_threats: Date.now() }))), 60000)); // 1 min — "last 1.5h" data
     }
     if (activeLayers.power_outages) {
       intervals.push(setInterval(() => fetchEndpoint('/api/power-outages', d => ({ power_outages: d.outages })), 300000)); // 5 min
