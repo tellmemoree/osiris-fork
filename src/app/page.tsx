@@ -257,6 +257,8 @@ export default function Dashboard() {
     malware: false,
     oblast_pressure: false,
     mig31k: false,
+    railway_network: false,
+    railway_incidents: false,
   });
   // Persist active layer toggles across restarts — read on mount, write on every change.
   // Skip the first write (count=1, initial defaults) so we don't overwrite saved state
@@ -580,6 +582,7 @@ export default function Dashboard() {
     shadow_fleet_tracks: () => fetchEndpoint('/api/maritime?tracks=1', (d: any) => ({ shadow_fleet_tracks: d.tracks ?? [] })),
     mig31k: () => fetchEndpoint('/api/mig31k', d => ({ mig31k: { detections: d.detections ?? [], updatedAt: d.timestamp } })).then(() => setLayerTimestamps(p => ({ ...p, mig31k: Date.now() }))),
     neptun_alerts: () => fetchEndpoint('/api/neptun-alerts', (d: any) => ({ neptun_alerts: { updatedAt: d?.updatedAt ?? null, activeKeys: Array.isArray(d?.activeKeys) ? d.activeKeys : [] } })),
+    railway_incidents: () => fetchEndpoint('/api/railway-incidents', d => ({ railway_incidents_geo: d.features || [] })),
   }), [fetchEndpoint]);
 
   // Fetch a source at most once (does NOT toggle the layer on).
@@ -651,6 +654,7 @@ export default function Dashboard() {
     if (activeLayers.shadow_fleet_tracks) loadOnce('shadow_fleet_tracks');
     if (activeLayers.mig31k) loadOnce('mig31k');
     if (activeLayers.neptun_raion_alerts) loadOnce('neptun_alerts');
+    if ((activeLayers as any).railway_incidents) loadOnce('railway_incidents');
   }, [activeLayers, loadOnce]);
 
   // Background pre-fetch: populate LayerPanel counts for every layer
@@ -761,6 +765,9 @@ export default function Dashboard() {
     }
     if (activeLayers.neptun_raion_alerts) {
       intervals.push(setInterval(() => fetchEndpoint('/api/neptun-alerts', (d: any) => ({ neptun_alerts: { updatedAt: d?.updatedAt ?? null, activeKeys: Array.isArray(d?.activeKeys) ? d.activeKeys : [] } })), 60000));
+    }
+    if ((activeLayers as any).railway_incidents) {
+      intervals.push(setInterval(() => fetchEndpoint('/api/railway-incidents', d => ({ railway_incidents_geo: d.features || [] })), 300000)); // 5 min
     }
     return () => intervals.forEach(clearInterval);
   }, [activeLayers, fetchEndpoint]);
