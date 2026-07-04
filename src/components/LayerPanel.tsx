@@ -60,7 +60,12 @@ const getLayerGroups = (theme: 'core' | 'ghost') => {
       { key: 'shadow_fleet_tracks', label: 'Fleet Tracks', icon: Activity, color: '#E040FB', dataKey: 'shadow_fleet_tracks' },
       { key: 'dark_vessel_dr', label: 'Dark Vessel DR', icon: Radio, color: '#E040FB', dataKey: '' },
       { key: 'cables', label: 'Submarine Cables', icon: Share2, color: '#4FC3F7', dataKey: 'submarine_cables' },
-      { key: 'satellites', label: 'Satellites', icon: Satellite, color: '#D4AF37', dataKey: 'satellites' },
+      { key: 'satellites', label: 'All Satellites', icon: Satellite, color: '#D4AF37', dataKey: 'satellites' },
+      { key: 'sat_comms', label: 'Starlink / Comms', icon: Satellite, color: '#00E5FF', dataKey: 'satellites', catKey: 'comms' },
+      { key: 'sat_military', label: 'Military / Intel', icon: Satellite, color: '#FF3D3D', dataKey: 'satellites', catKey: 'military' },
+      { key: 'sat_navigation', label: 'GPS / Navigation', icon: Satellite, color: '#76FF03', dataKey: 'satellites', catKey: 'navigation' },
+      { key: 'sat_earth', label: 'Earth Observation', icon: Satellite, color: '#4FC3F7', dataKey: 'satellites', catKey: 'earth_obs' },
+      { key: 'sat_science', label: 'Stations / Telescopes', icon: Satellite, color: '#CE93D8', dataKey: 'satellites', catKey: 'science' },
     ],
   },
   {
@@ -192,7 +197,11 @@ function LayerPanel({ data, activeLayers, setActiveLayers, isMobile, theme = 'co
   // Shadow Fleet has no dedicated data array — its vessels are the
   // shadow_fleet-flagged subset of maritime_ships. Count them explicitly so the
   // layer shows a tally instead of nothing.
-  const countFor = (layer: { key: string; dataKey: string }): number | null => {
+  const countFor = (layer: { key: string; dataKey: string; catKey?: string }): number | null => {
+    if (layer.catKey) {
+      const n = data.category_counts?.[layer.catKey] ?? 0;
+      return n > 0 ? n : null;
+    }
     if (layer.key === 'mig31k') {
       const n = data.mig31k?.detections?.length ?? 0;
       return n > 0 ? n : null;
