@@ -317,7 +317,7 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
       }
 
       // Sources
-      const sources = ['flights','military','jets','private-fl','satellites','earthquakes','gdelt','gps-jamming','day-night','cctv','fires','weather','infrastructure','maritime','maritime-choke','maritime-ships','live-news','sigint-news','conflict-zones', 'balloons', 'radiation', 'ip-sweep-devices', 'ip-sweep-pulse', 'ip-sweep-connections', 'scan-targets', 'sdk-entities', 'sdk-links', 'air-raid-alerts', 'power-outages', 'kab-threats', 'frontlines', 'frontline-delta', 'axis-focus', 'air-quality', 'ioda-outages', 'malware-nodes', 'thermal-aoi', 'captures', 'network-mesh', 'shadow-fleet-tracks', 'alarm-vectors'];
+      const sources = ['flights','military','jets','private-fl','satellites','earthquakes','gdelt','gps-jamming','day-night','cctv','fires','weather','infrastructure','maritime','maritime-choke','maritime-ships','live-news','sigint-news','conflict-zones', 'balloons', 'radiation', 'ip-sweep-devices', 'ip-sweep-pulse', 'ip-sweep-connections', 'scan-targets', 'sdk-entities', 'sdk-links', 'air-raid-alerts', 'power-outages', 'kab-threats', 'frontlines', 'frontline-delta', 'axis-focus', 'air-quality', 'ioda-outages', 'malware-nodes', 'thermal-aoi', 'captures', 'network-mesh', 'shadow-fleet-tracks', 'alarm-vectors', 'mig31k-alerts'];
       sources.forEach(s => map.addSource(s, { type: 'geojson', data: EMPTY_FC }));
 
       // Warning icon generator (parameterized — eliminates 3x copy-paste)
@@ -592,6 +592,28 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
         'text-field': ['concat', 'KAB ', ['get','regionName']], 'text-size': 9, 'text-font': ['Open Sans Regular'],
         'text-offset': [0, 1.9], 'text-allow-overlap': false,
       }, paint: { 'text-color': '#FF8C00', 'text-halo-color': '#000', 'text-halo-width': 1 }});
+
+      // MiG-31K Carrier Detection — amber (ADS-B cyan stroke / Telegram red stroke).
+      // Same glow+dot+label pattern as KAB; nationwide relevance so minzoom: 3.
+      map.addLayer({ id: 'mig31k-glow', type: 'circle', source: 'mig31k-alerts', paint: {
+        'circle-radius': ['interpolate', ['linear'], ['zoom'], 1, 14, 5, 24, 10, 36],
+        'circle-color': '#FFAB00', 'circle-opacity': 0.15, 'circle-blur': 1,
+      }});
+      map.addLayer({ id: 'mig31k-dots', type: 'circle', source: 'mig31k-alerts', paint: {
+        'circle-radius': ['interpolate', ['linear'], ['zoom'], 1, 6, 5, 9.5, 10, 14],
+        'circle-color': '#FFAB00', 'circle-opacity': 0.9,
+        'circle-stroke-width': ['case', ['==', ['get', 'source'], 'adsb'], 3, 1.5],
+        'circle-stroke-color': ['case', ['==', ['get', 'source'], 'adsb'], '#00E5FF', '#FF1744'],
+        'circle-stroke-opacity': 0.85,
+      }});
+      map.addLayer({ id: 'mig31k-label', type: 'symbol', source: 'mig31k-alerts', minzoom: 3,
+        layout: {
+          'text-field': ['concat', 'MiG-31K ', ['get', 'locationName']],
+          'text-size': 9, 'text-font': ['Open Sans Regular'],
+          'text-offset': [0, 1.9], 'text-allow-overlap': false,
+        },
+        paint: { 'text-color': '#FFAB00', 'text-halo-color': '#000', 'text-halo-width': 1 },
+      });
 
       // Drone / UAV Swarms — route trail (Telegram-derived, confirmed sightings only).
       // 'drone-threats' source kept for backward compat (threats array still flows to it).
@@ -1442,6 +1464,25 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
       </div>`);
     });
 
+    // ── MiG-31K Carrier Detection ──
+    map.on('click', 'mig31k-dots', e => {
+      const f = e.features?.[0]; if (!f) return;
+      const p = f.properties as any;
+      const timeStr = p.detectedAt ? new Date(p.detectedAt).toLocaleTimeString() : '–';
+      const esc2 = (s: any) => String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+      const isAdsb = p.source === 'adsb';
+      const sourceBadge = isAdsb
+        ? `<span style="color:#00E5FF;font-weight:700">ADS-B detected</span>`
+        : `<span style="color:#FF9800;font-weight:700">Telegram-reported</span>`;
+      const detail = isAdsb
+        ? `<div>${esc2(p.callsign ?? 'Unknown callsign')} · ${esc2(p.model)} · ${esc2(p.alt != null ? Math.round(p.alt)+'ft' : '–')} · ${esc2(p.speed_knots != null ? Math.round(p.speed_knots)+'kts' : '–')}</div>`
+        : `<div style="font-size:11px;color:#aaa;margin-top:4px">${esc2((p.text ?? '').slice(0,200))}${(p.text?.length ?? 0) > 200 ? '…' : ''}</div><div style="margin-top:4px;color:#888;font-size:10px">Reports: ${esc2(p.count)} · ${esc2(p.sources)}</div><div style="margin-top:6px;color:#666;font-size:9px">Heuristic text signal — verify before acting</div>`;
+      new maplibregl.Popup({ maxWidth: '320px' })
+        .setLngLat(e.lngLat)
+        .setHTML(`<div style="padding:8px"><div style="font-weight:700;font-size:13px;color:#FFAB00;margin-bottom:4px">✈ MiG-31K CARRIER</div><div style="margin-bottom:4px">${sourceBadge}</div><div style="color:#ccc;font-size:11px">${esc2(p.locationName)} · ${timeStr}</div>${detail}</div>`)
+        .addTo(map);
+    });
+
     // ── Drone / UAV Swarms — route waypoint nodes ──
     map.on('click', 'drone-route-nodes', e => {
       if (!e.features?.length) return;
@@ -1680,7 +1721,7 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
     });
 
     // ── Generic hover for clickables ──
-    ['conflict-icons','cctv-dots','eq-circles','sat-dots','fires-heat','gdelt-dots','weather-dots','infra-dots','maritime-dots','choke-dots','news-dots','sigint-news-dots','balloon-dots','rad-dots','ship-dots','ship-shadow-dots','sweep-device-dots','scan-targets-dots','sdk-sea','sdk-sea-glow','sdk-sea-atmo','sdk-air','sdk-air-glow','sdk-air-atmo','sdk-intel','sdk-intel-glow','sdk-intel-atmo','raid-dots','outage-dots','kab-dots','drone-route-nodes','missile-route-nodes','ru-raid-dots','malware-dots','ioda-dots'].forEach(layer => {
+    ['conflict-icons','cctv-dots','eq-circles','sat-dots','fires-heat','gdelt-dots','weather-dots','infra-dots','maritime-dots','choke-dots','news-dots','sigint-news-dots','balloon-dots','rad-dots','ship-dots','ship-shadow-dots','sweep-device-dots','scan-targets-dots','sdk-sea','sdk-sea-glow','sdk-sea-atmo','sdk-air','sdk-air-glow','sdk-air-atmo','sdk-intel','sdk-intel-glow','sdk-intel-atmo','raid-dots','outage-dots','kab-dots','mig31k-dots','drone-route-nodes','missile-route-nodes','ru-raid-dots','malware-dots','ioda-dots'].forEach(layer => {
       map.on('mouseenter', layer, () => { map.getCanvas().style.cursor = 'pointer'; });
       map.on('mouseleave', layer, () => { map.getCanvas().style.cursor = ''; });
     });
@@ -2431,6 +2472,24 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
     })));
   }, [mapReady, data.kab_threats, activeLayers.kab_threats, setGeo, replayTime]);
 
+  // MiG-31K Carrier Detection — amber dots, ADS-B cyan stroke / Telegram red stroke.
+  useEffect(() => {
+    if (!mapReady) return;
+    const det: any[] = activeLayers.mig31k && data.mig31k?.detections ? data.mig31k.detections : [];
+    setGeo('mig31k-alerts', det
+      .filter((d: any) => d.lat != null && d.lng != null)
+      .map((d: any) => ({
+        type: 'Feature',
+        geometry: { type: 'Point', coordinates: [d.lng, d.lat] },
+        properties: {
+          source: d.source, sourceLabel: d.sourceLabel, locationName: d.locationName,
+          detectedAt: d.detectedAt, callsign: d.callsign, model: d.model,
+          alt: d.alt, speed_knots: d.speed_knots, text: d.text,
+          count: d.count, sources: d.sources,
+        },
+      })));
+  }, [mapReady, data.mig31k, activeLayers.mig31k, setGeo]);
+
   // Drone threats — keep flowing to drone-threats source for backward compat.
   useEffect(() => {
     if (!mapReady) return;
@@ -2678,6 +2737,7 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
     setVis(['raid-oblast-fill','raid-oblast-outline','raid-district-fill','raid-district-outline','raid-glow','raid-dots','raid-label'], activeLayers.air_raids);
     setVis(['outage-oblast-fill','outage-oblast-outline','outage-glow','outage-dots','outage-label'], activeLayers.power_outages);
     setVis(['kab-glow','kab-dots','kab-label'], activeLayers.kab_threats);
+    setVis(['mig31k-glow','mig31k-dots','mig31k-label'], activeLayers.mig31k);
     setVis(['drone-route-line','drone-route-arrows','drone-route-nodes','drone-route-label'], activeLayers.drone_threats);
     setVis(['missile-route-line','missile-route-arrows','missile-route-nodes','missile-route-label'], activeLayers.missile_threats);
     setVis(['alarm-vector-line','alarm-vector-arrow','alarm-vector-label'], activeLayers.alarm_vectors);
