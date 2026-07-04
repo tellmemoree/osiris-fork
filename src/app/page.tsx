@@ -118,10 +118,17 @@ function getYouTubeWatchUrl(url: string): string {
 }
 
 const TIMELINE_TYPE_TO_LAYER: Record<string, string> = {
-  kab:     'kab_threats',
-  thermal: 'thermal_aoi',
-  capture: 'captures',
-  gdelt:   'global_incidents',
+  kab:         'kab_threats',
+  thermal:     'thermal_aoi',
+  capture:     'captures',
+  gdelt:       'global_incidents',
+  air_raid:    'air_raids',
+  ru_air_raid: 'ru_air_raids',
+  drone:       'drone_threats',
+  missile:     'missile_threats',
+  mig31k:      'mig31k',
+  railway:     'railway_incidents',
+  correlated:  'correlated_events',
 };
 
 export default function Dashboard() {
@@ -146,6 +153,13 @@ export default function Dashboard() {
     (data.gdelt       || []).forEach((e: any) => e.published  && push(new Date(e.published).getTime(),  'gdelt'));
     (data.thermal_aoi || []).forEach((a: any) => { const ms = parseThermalLatest(a.latest); if (ms) push(ms, 'thermal'); });
     (data.captures    || []).forEach((c: any) => c.date       && push(new Date(c.date).getTime(),       'capture'));
+    (data.air_raids   || []).forEach((r: any) => r.startedAt  && push(new Date(r.startedAt).getTime(),  'air_raid'));
+    (data.ru_air_raids || []).forEach((r: any) => r.started_at && push(new Date(r.started_at).getTime(), 'ru_air_raid'));
+    (data.drone_threats || []).forEach((d: any) => d.startedAt && push(new Date(d.startedAt).getTime(), 'drone'));
+    (data.missile_routes || []).forEach((m: any) => m.latestAt && push(new Date(m.latestAt).getTime(),  'missile'));
+    (data.mig31k?.detections || []).forEach((m: any) => m.detectedAt && push(new Date(m.detectedAt).getTime(), 'mig31k'));
+    (data.railway_incidents_geo || []).forEach((f: any) => f.properties?.timestamp && push(new Date(f.properties.timestamp).getTime(), 'railway'));
+    (data.correlated_events || []).forEach((e: any) => e.ts && push(new Date(e.ts).getTime(), 'correlated'));
     return evs;
   }, [dataVersion]); // eslint-disable-line react-hooks/exhaustive-deps
 
