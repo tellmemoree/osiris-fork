@@ -33,10 +33,12 @@ export interface TrackEntry {
   ts:             number;  // epoch ms — sort key and dedup anchor
   channel:        string;
   oblast:         string;
+  place?:         string;  // city/village named in the text, if more specific than the oblast centroid
   lat:            number;
   lng:            number;
   text:           string;
   alarmConfirmed: boolean;
+  neptunConfirmed?: boolean; // Neptune.in.ua raion corroboration (drone routes only)
   fingerprint?:   string;  // optional — old on-disk entries lack it
 }
 
@@ -192,10 +194,12 @@ export function buildWavesFromEntries(entries: TrackEntry[]): RouteWave[] {
       lat:            entry.lat,
       lng:            entry.lng,
       oblast:         entry.oblast,
+      place:          entry.place,
       ts:             new Date(entry.ts).toISOString(),
       text:           entry.text,
       channel:        entry.channel,
       alarmConfirmed: entry.alarmConfirmed,
+      neptunConfirmed: entry.neptunConfirmed,
       confidence:     undefined, // stamped by flush() after full wave is known
     });
     lastTs = entry.ts;
@@ -220,10 +224,12 @@ export function wavesToTrackEntries(
         ts,
         channel:        wp.channel,
         oblast:         wp.oblast,
+        place:          wp.place,
         lat:            wp.lat,
         lng:            wp.lng,
         text:           wp.text,
         alarmConfirmed: !!wp.alarmConfirmed,
+        neptunConfirmed: wp.neptunConfirmed,
         fingerprint:    msgFingerprint(wp.text, ts),
       };
     }),
