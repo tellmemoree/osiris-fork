@@ -207,6 +207,12 @@ const globalForAis = globalThis as unknown as {
   // GFW identity enrichment cache: MMSI → {flag ISO-3, imo, name, fetchedAt}.
   gfwEnrichment: Map<number, { flag?: string; imo?: string; name?: string; fetchedAt: number }>;
   gfwEnrichTimer: ReturnType<typeof setTimeout> | null;
+  // Current AIS socket + watchdog: aisstream.io can go silent without ever firing
+  // close/error, leaving the socket open but dead. The watchdog force-terminates
+  // it after AIS_STALE_MS of silence so the existing close→reconnect path fires.
+  aisWs: WebSocket | null;
+  aisConnectedAt: number | null;
+  aisWatchdogTimer: ReturnType<typeof setInterval> | null;
 };
 
 function nextMidnightUtc(): number {
@@ -229,6 +235,9 @@ if (!globalForAis.shipsCache) {
   globalForAis.vesselApiCallsResetAt = nextMidnightUtc();
   globalForAis.vesselApiTimer = null;
   globalForAis.gfwEnrichment = new Map();
+  globalForAis.aisWs = null;
+  globalForAis.aisConnectedAt = null;
+  globalForAis.aisWatchdogTimer = null;
   globalForAis.gfwEnrichTimer = null;
   // Best-effort restore of the learned sanctioned-MMSI set. Mutates the same
   // Set the `shadowMmsi` const below references, so additions land in it.
@@ -337,9 +346,11 @@ function connectAisStream() {
     globalForAis.isAisConnecting = false;
     return;
   }
+  globalForAis.aisWs = ws;
 
   ws.on("open", () => {
     globalForAis.isAisConnecting = false;
+    globalForAis.aisConnectedAt = Date.now();
     const subscriptionMessage = {
       APIKey: apiKey,
       // Target specific high-value SCM areas to ensure data delivery on free tier
@@ -486,6 +497,8 @@ function connectAisStream() {
 
   ws.on("close", () => {
     globalForAis.isAisConnecting = false;
+    globalForAis.aisConnectedAt = null;
+    if (globalForAis.aisWs === ws) globalForAis.aisWs = null;
     setTimeout(connectAisStream, 5000); // Reconnect
   });
 
@@ -494,8 +507,29 @@ function connectAisStream() {
   });
 }
 
+// aisstream.io can leave the socket open but dead — no "close"/"error" event
+// ever fires, so the reconnect path above never runs. This watchdog force-
+// terminates the socket after AIS_STALE_MS of silence, which does fire
+// "close" and lets the existing reconnect logic take over.
+const AIS_STALE_MS = 10 * 60 * 1000; // 10 min
+const AIS_WATCHDOG_INTERVAL_MS = 60 * 1000;
+
+function startAisWatchdog() {
+  if (globalForAis.aisWatchdogTimer) return;
+  globalForAis.aisWatchdogTimer = setInterval(() => {
+    const ws = globalForAis.aisWs;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    const reference = globalForAis.lastAisMessageAt ?? globalForAis.aisConnectedAt;
+    if (reference !== null && Date.now() - reference > AIS_STALE_MS) {
+      console.warn(`[OSIRIS] AIS stream stale (no messages for >${AIS_STALE_MS / 60000}min) — forcing reconnect`);
+      ws.terminate();
+    }
+  }, AIS_WATCHDOG_INTERVAL_MS);
+}
+
 // Start connection process asynchronously
 connectAisStream();
+startAisWatchdog();
 
 // ── VesselAPI Fallback ────────────────────────────────────────────────────────
 // REST AIS sweep when aisstream.io has been silent for >30 min.
