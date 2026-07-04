@@ -58,6 +58,7 @@ const getLayerGroups = (theme: 'core' | 'ghost') => {
       { key: 'ships', label: 'Live Ships (AIS)', icon: Ship, color: '#00BCD4', dataKey: 'maritime_ships' },
       { key: 'shadow_fleet', label: 'Shadow Fleet', icon: AlertTriangle, color: '#E040FB', dataKey: '' },
       { key: 'shadow_fleet_tracks', label: 'Fleet Tracks', icon: Activity, color: '#E040FB', dataKey: 'shadow_fleet_tracks' },
+      { key: 'dark_vessel_dr', label: 'Dark Vessel DR', icon: Radio, color: '#E040FB', dataKey: '' },
       { key: 'cables', label: 'Submarine Cables', icon: Share2, color: '#4FC3F7', dataKey: 'submarine_cables' },
       { key: 'satellites', label: 'Satellites', icon: Satellite, color: '#D4AF37', dataKey: 'satellites' },
     ],
