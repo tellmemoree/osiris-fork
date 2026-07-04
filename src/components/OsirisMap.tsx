@@ -318,7 +318,7 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
       }
 
       // Sources
-      const sources = ['flights','military','jets','private-fl','satellites','earthquakes','gdelt','gps-jamming','day-night','cctv','fires','weather','infrastructure','maritime','maritime-choke','maritime-ships','live-news','sigint-news','conflict-zones', 'balloons', 'radiation', 'ip-sweep-devices', 'ip-sweep-pulse', 'ip-sweep-connections', 'scan-targets', 'sdk-entities', 'sdk-links', 'air-raid-alerts', 'power-outages', 'kab-threats', 'frontlines', 'frontline-ru-gain', 'frontline-ua-gain', 'axis-focus', 'air-quality', 'ioda-outages', 'malware-nodes', 'thermal-aoi', 'captures', 'network-mesh', 'shadow-fleet-tracks', 'alarm-vectors', 'mig31k-alerts', 'correlated-events', 'dark-vessel-uncertainty', 'dark-vessel-dr'];
+      const sources = ['flights','military','jets','private-fl','satellites','earthquakes','gdelt','gps-jamming','day-night','cctv','fires','weather','infrastructure','maritime','maritime-choke','maritime-ships','live-news','sigint-news','conflict-zones', 'balloons', 'radiation', 'ip-sweep-devices', 'ip-sweep-pulse', 'ip-sweep-connections', 'scan-targets', 'sdk-entities', 'sdk-links', 'air-raid-alerts', 'power-outages', 'kab-threats', 'frontlines', 'frontline-ru-gain', 'frontline-ua-gain', 'axis-focus', 'air-quality', 'ioda-outages', 'malware-nodes', 'thermal-aoi', 'captures', 'network-mesh', 'shadow-fleet-tracks', 'alarm-vectors', 'mig31k-alerts', 'correlated-events', 'dark-vessel-uncertainty', 'dark-vessel-dr', 'railway-incidents'];
       sources.forEach(s => map.addSource(s, { type: 'geojson', data: EMPTY_FC }));
 
       // Static rail network — loaded directly from public/ukraine-railways.geojson (ODbL)
@@ -1207,7 +1207,80 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
           'text-opacity':     0.85,
         },
       });
-      // Shadow Fleet Track Lines — age-faded dashed polylines, one segment per, 'dark-vessel-uncertainty-fill', 'dark-vessel-uncertainty', 'dark-vessel-dr-point', 'dark-vessel-dr', 'dark-vessel-dr-label', 'dark-vessel-dr'];
+
+      // Shadow Fleet Track Lines — age-faded dashed polylines, one segment per
+      // consecutive position pair. Opacity fades from near-full (fresh) to near-zero
+      // (24h old) via data-driven interpolation on the ageHours property.
+      map.addLayer({
+        id: 'shadow-track-line',
+        type: 'line',
+        source: 'shadow-fleet-tracks',
+        filter: ['==', ['geometry-type'], 'LineString'],
+        layout: { 'line-cap': 'round', 'line-join': 'round' },
+        paint: {
+          'line-color': '#E040FB',
+          'line-width': ['interpolate', ['linear'], ['zoom'], 1, 1, 8, 2.5],
+          'line-dasharray': [2, 2],
+          'line-opacity': ['interpolate', ['linear'], ['get', 'ageHours'], 0, 0.9, 24, 0.12],
+        },
+      });
+
+      // ── AIS Dark Vessel Dead-Reckoning layers ──
+      // Expanding uncertainty ring — fill fades out as elapsed time grows.
+      map.addLayer({ id: 'dark-vessel-uncertainty-fill', type: 'fill', source: 'dark-vessel-uncertainty', paint: {
+        'fill-color': '#E040FB',
+        'fill-opacity': ['interpolate', ['linear'], ['get', 'elapsedHours'], 0, 0.25, 6, 0.05],
+      }});
+      // Hollow circle marker for the DR estimated position.
+      map.addLayer({ id: 'dark-vessel-dr-point', type: 'circle', source: 'dark-vessel-dr', paint: {
+        'circle-radius': 6,
+        'circle-color': 'transparent',
+        'circle-stroke-color': '#E040FB',
+        'circle-stroke-width': 2,
+        'circle-opacity': 0.8,
+      }});
+      // "DR EST" text label above the DR point.
+      map.addLayer({ id: 'dark-vessel-dr-label', type: 'symbol', source: 'dark-vessel-dr', minzoom: 3, layout: {
+        'text-field': 'DR EST',
+        'text-size': 9,
+        'text-font': ['Open Sans Regular'],
+        'text-offset': [0, -1.4],
+        'text-allow-overlap': false,
+      }, paint: { 'text-color': '#E040FB', 'text-halo-color': '#000', 'text-halo-width': 1 }});
+
+      // ── Correlated Events — multi-signal oblast correlation (ring + label) ──
+      // Pulse-style ring: alarm_confirmed = red (#FF1744), unconfirmed = orange (#FF6D00).
+      map.addLayer({
+        id: 'correlated-ring',
+        type: 'circle',
+        source: 'correlated-events',
+        paint: {
+          'circle-radius': 18,
+          'circle-color': ['case', ['boolean', ['get', 'alarm_confirmed'], false], '#FF1744', '#FF6D00'],
+          'circle-opacity': 0.25,
+          'circle-stroke-color': ['case', ['boolean', ['get', 'alarm_confirmed'], false], '#FF1744', '#FF6D00'],
+          'circle-stroke-width': 2,
+          'circle-stroke-opacity': 0.8,
+        },
+      });
+      map.addLayer({
+        id: 'correlated-label',
+        type: 'symbol',
+        source: 'correlated-events',
+        minzoom: 4,
+        layout: {
+          'text-field': ['get', 'oblast'],
+          'text-size': 9,
+          'text-font': ['Open Sans Regular'],
+          'text-offset': [0, 2.2],
+          'text-allow-overlap': false,
+        },
+        paint: {
+          'text-color': ['case', ['boolean', ['get', 'alarm_confirmed'], false], '#FF1744', '#FF6D00'],
+          'text-halo-color': '#000',
+          'text-halo-width': 1,
+        },
+      });
 
       // Hide disputed boundary lines from the Carto base style (e.g. dashed
       // line drawn between Crimea and mainland Ukraine). Regex catches any
@@ -3013,7 +3086,8 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
     setVis(['shadow-track-line'], activeLayers.shadow_fleet_tracks);
     setVis(['aq-glow','aq-dots','aq-label'], activeLayers.air_quality);
     setVis(['correlated-ring', 'correlated-label'], activeLayers.correlated_events);
-
+    setVis(['rail-network-line'], activeLayers.railway_network);
+    setVis(['rail-strike-dots','rail-strike-label'], activeLayers.railway_incidents);
   }, [mapReady, activeLayers, setVis]);
 
   // IP Sweep visualization

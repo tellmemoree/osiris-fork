@@ -280,6 +280,7 @@ export default function Dashboard() {
   const sessionDisabledRef = useRef(sessionDisabled);
   useEffect(() => { activeLayersRef.current = activeLayers; }, [activeLayers]);
   useEffect(() => { sessionDisabledRef.current = sessionDisabled; }, [sessionDisabled]);
+  // LayerPanel correlated_events toggle also opens the ThreatTimeline panel.
   useEffect(() => {
     if (activeLayers.correlated_events) setShowThreatTimeline(true);
   }, [activeLayers.correlated_events]); // eslint-disable-line react-hooks/exhaustive-deps
