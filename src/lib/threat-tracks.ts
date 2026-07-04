@@ -69,9 +69,35 @@ async function saveTrackEntries(file: string, entries: TrackEntry[]): Promise<vo
 // ── merge ─────────────────────────────────────────────────────────────────────
 
 /**
+ * Dedup key for a TrackEntry.
+ *
+ * When a `fingerprint` is present (set by wavesToTrackEntries via msgFingerprint),
+ * use `weaponType:fingerprint` — the fingerprint already encodes text + 30-min
+ * bucket, so channel/ts/oblast are redundant.
+ *
+ * Fallback to `weaponType:channel:ts:oblast` for pre-PR-#115 on-disk entries
+ * that lack the fingerprint field; this key was the only dedup anchor before.
+ *
+ * weaponType MUST stay in the key in both branches: the missile file is shared
+ * by all missile types — a single message that classifies as two types produces
+ * two entries with the same fingerprint but different weaponType, and both are
+ * legitimate entries that must be kept.
+ *
+ * Belt-and-braces: this catches reposts that straddle corpus refreshes (i.e.
+ * the same underlying alert appears in two consecutive 15-min corpus windows).
+ * buildRoute()'s seenFingerprints Set handles within-corpus dedup; this layer
+ * handles cross-window persistence dedup.
+ */
+function dedupKey(e: TrackEntry): string {
+  return e.fingerprint
+    ? `${e.weaponType}:${e.fingerprint}`
+    : `${e.weaponType}:${e.channel}:${e.ts}:${e.oblast}`;
+}
+
+/**
  * Merges `incoming` entries into the stored history, prunes entries older
- * than `ttlMs`, deduplicates by `${weaponType}:${channel}:${ts}`, writes back
- * to disk, and returns the updated array.
+ * than `ttlMs`, deduplicates via `dedupKey()` (fingerprint-primary, channel+ts
+ * fallback), writes back to disk, and returns the updated array.
  *
  * weaponType is part of the dedup key because the missile file is shared by all
  * missile types: a single message classified as two types (e.g. the generic
@@ -93,9 +119,9 @@ export async function mergeAndSaveTracks(
   const cutoff  = Date.now() - ttlMs;
   const existing = (await loadTrackEntries(file)).filter(e => e.ts > cutoff);
 
-  const seen = new Set(existing.map(e => `${e.weaponType}:${e.channel}:${e.ts}:${e.oblast}`));
+  const seen = new Set(existing.map(e => dedupKey(e)));
   for (const entry of incoming) {
-    const key = `${entry.weaponType}:${entry.channel}:${entry.ts}:${entry.oblast}`;
+    const key = dedupKey(entry);
     if (!seen.has(key)) {
       existing.push(entry);
       seen.add(key);

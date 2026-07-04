@@ -623,7 +623,7 @@ export default function Dashboard() {
     if (activeLayers.power_outages) loadOnce('power_outages');
     if (activeLayers.kab_threats) loadOnce('kab_threats');
     if (activeLayers.air_raids) loadOnce('weapon_threats'); // enriches air-raid popups
-    if (activeLayers.drone_threats) loadOnce('drone_threats');
+    if (activeLayers.drone_threats || activeLayers.alarm_vectors) loadOnce('drone_threats');
     if (activeLayers.missile_threats) loadOnce('missile_threats');
     if (activeLayers.ru_air_raids) loadOnce('ru_air_raids');
     if (activeLayers.frontlines) loadOnce('frontlines');
@@ -692,7 +692,7 @@ export default function Dashboard() {
     if (activeLayers.kab_threats) {
       intervals.push(setInterval(() => fetchEndpoint('/api/kab-threats', d => ({ kab_threats: d.threats })).then(() => setLayerTimestamps(p => ({ ...p, kab_threats: Date.now() }))), 60000)); // 1 min
     }
-    if (activeLayers.drone_threats) {
+    if (activeLayers.drone_threats || activeLayers.alarm_vectors) {
       intervals.push(setInterval(() => fetchEndpoint('/api/drone-threats', d => ({ drone_threats: d.threats, drone_waves: d.waves, drone_uav_count: d.uav_count ?? 0, alarm_vectors: d.alarm_vectors ?? [] })).then(() => setLayerTimestamps(p => ({ ...p, drone_threats: Date.now() }))), 60000)); // 1 min — "last 1.5h" data
     }
     if (activeLayers.missile_threats) {
