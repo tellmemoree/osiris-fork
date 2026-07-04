@@ -19,7 +19,7 @@ export async function GET(req: Request) {
 
     // Fetch all internal APIs in parallel (they have their own Cache-Control TTLs)
     const [flightsRes, satsRes, cctvRes, weatherRes, infraRes, gdeltRes] = await Promise.allSettled([
-      fetch(`${origin}/api/flights`, { next: { revalidate: 45 } }),
+      fetch(`${origin}/api/flights`, { cache: 'no-store' }),
       fetch(`${origin}/api/satellites`, { next: { revalidate: 3600 } }),
       fetch(`${origin}/api/cctv`, { next: { revalidate: 3600 } }),
       fetch(`${origin}/api/weather`, { next: { revalidate: 300 } }),
@@ -37,10 +37,10 @@ export async function GET(req: Request) {
     // Safely parse counts
     if (flightsRes.status === 'fulfilled' && flightsRes.value.ok) {
       const data = await flightsRes.value.json();
-      flights = (data.commercial_flights?.length || 0) + 
-                (data.private_flights?.length || 0) + 
-                (data.private_jets?.length || 0) + 
-                (data.military_flights?.length || 0);
+      flights = data.total ?? ((data.commercial_flights?.length || 0) +
+                (data.private_flights?.length || 0) +
+                (data.private_jets?.length || 0) +
+                (data.military_flights?.length || 0));
     }
 
     if (satsRes.status === 'fulfilled' && satsRes.value.ok) {

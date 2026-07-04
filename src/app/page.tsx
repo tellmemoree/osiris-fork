@@ -3,7 +3,7 @@
 import { useEffect, useState, useRef, useCallback, useMemo } from 'react';
 import dynamic from 'next/dynamic';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Layers, BarChart3, Newspaper, Search, X, Globe, MapPinned, Radar, Satellite, Moon, ExternalLink, AlertTriangle, Activity, Database, Wifi, ChevronDown, ChevronUp, Bell, MoreHorizontal, Play, FileText, Network, GitMerge } from 'lucide-react';
+import { Layers, BarChart3, Newspaper, Search, X, Globe, MapPinned, Radar, Satellite, Moon, ExternalLink, AlertTriangle, Activity, Database, Wifi, ChevronDown, ChevronUp, Bell, MoreHorizontal, Play, FileText, Network, GitMerge, Crosshair } from 'lucide-react';
 import IntelFeed from '@/components/IntelFeed';
 import MarketsPanel from '@/components/MarketsPanel';
 import ScmPanel from '@/components/ScmPanel';
@@ -27,6 +27,8 @@ import NotificationDrawer, { type NotificationRecord } from '@/components/Notifi
 import ThreatHUD from '@/components/ThreatHUD';
 import LayerFreshness from '@/components/LayerFreshness';
 import TimelineLayerToast, { type TimelineLayerToastItem } from '@/components/TimelineLayerToast';
+import CommandPalette, { type PaletteCommand } from '@/components/CommandPalette';
+import ThreatFusionHUD from '@/components/ThreatFusionHUD';
 
 const OsirisMap = dynamic(() => import('@/components/OsirisMap'), { ssr: false });
 const LayerPanel = dynamic(() => import('@/components/LayerPanel'));
@@ -163,6 +165,7 @@ export default function Dashboard() {
   const [showIntel, setShowIntel] = useState(false);
   const [showSearch, setShowSearch] = useState(false);
   const [showEntityGraph, setShowEntityGraph] = useState(false);
+  const [showFusion, setShowFusion] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [mobilePanel, setMobilePanel] = useState<'layers'|'markets'|'intel'|'search'|'recon'|'more'|'timeline'|'frontline'|null>(null);
   const [mapProjection, setMapProjection] = useState<'globe'|'mercator'>('globe');
@@ -843,6 +846,68 @@ export default function Dashboard() {
     dataRef.current = { ...dataRef.current, sdk_entities: sdkEntities };
   }, [dataVersion, activeLayers.sdk_sea, activeLayers.sdk_air, activeLayers.sdk_naval]);
 
+  const flyTo = useCallback((lat: number, lng: number, zoom?: number) => {
+    setFlyToLocation({ lat, lng, ts: Date.now() });
+    if (zoom) setMapView(v => ({ ...v, zoom }));
+  }, []);
+  const closeRightPanels = useCallback(() => {
+    setShowIntel(false); setShowMarkets(false); setShowAlerts(false);
+    setShowEntityGraph(false); setShowSearch(false); setShowFusion(false);
+  }, []);
+  const toggleFullscreen = useCallback(() => {
+    if (!document.fullscreenElement) document.documentElement.requestFullscreen();
+    else document.exitFullscreen();
+  }, []);
+
+  const paletteCommands = useMemo<PaletteCommand[]>(() => {
+    type LayerKey = keyof typeof activeLayers;
+    const LAYER_DEFS: { key: LayerKey; label: string; hint: string }[] = [
+      { key: 'flights' as LayerKey, label: 'Commercial Flights', hint: 'ADS-B / OpenSky' },
+      { key: 'private' as LayerKey, label: 'Private Aircraft', hint: 'ADS-B' },
+      { key: 'jets' as LayerKey, label: 'Private Jets', hint: 'ADS-B' },
+      { key: 'military' as LayerKey, label: 'Military Aircraft', hint: 'ADS-B' },
+      { key: 'maritime' as LayerKey, label: 'Maritime / Naval', hint: 'Ports · Ships' },
+      { key: 'satellites' as LayerKey, label: 'Satellites', hint: 'Orbital tracking' },
+      { key: 'cctv' as LayerKey, label: 'CCTV Cameras', hint: 'Public traffic cams' },
+      { key: 'earthquakes' as LayerKey, label: 'Earthquakes', hint: 'USGS M2.5+' },
+      { key: 'fires' as LayerKey, label: 'Active Fires', hint: 'NASA FIRMS' },
+      { key: 'weather' as LayerKey, label: 'Severe Weather', hint: 'EONET + NWS + GDACS' },
+      { key: 'global_incidents' as LayerKey, label: 'Global Incidents', hint: 'GDELT events' },
+      { key: 'malware' as LayerKey, label: 'Live Malware', hint: 'abuse.ch feed' },
+      { key: 'frontlines' as LayerKey, label: 'Frontlines', hint: 'DeepState / Militaryland' },
+      { key: 'drone_threats' as LayerKey, label: 'Drone Threats', hint: 'UA threat feed' },
+      { key: 'gps_jamming' as LayerKey, label: 'GPS Jamming', hint: 'Interference zones' },
+    ].filter(l => l.key in activeLayers);
+    const cmds: PaletteCommand[] = [];
+    for (const l of LAYER_DEFS) {
+      const on = !!activeLayers[l.key];
+      cmds.push({ id: `layer:${String(l.key)}`, group: 'LAYERS', title: `${on ? 'Hide' : 'Show'} ${l.label}`, subtitle: l.hint, keywords: `layer toggle ${l.label} ${l.hint}`, icon: <Layers className="w-4 h-4" />, badge: on ? 'ON' : 'OFF', active: on, keepOpen: true, run: () => setActiveLayers(prev => ({ ...prev, [l.key]: !prev[l.key] })) });
+    }
+    const NAV = [
+      { label: 'Ukraine', hint: 'Active conflict', lat: 49, lng: 32, zoom: 6 },
+      { label: 'Global View', hint: 'Whole earth', lat: 20, lng: 0, zoom: 2.5 },
+      { label: 'Middle East', hint: 'Regional theatre', lat: 30, lng: 45, zoom: 4.5 },
+      { label: 'Gaza / Israel', hint: 'Conflict zone', lat: 31.5, lng: 34.7, zoom: 8 },
+      { label: 'Taiwan Strait', hint: 'Flashpoint', lat: 24.5, lng: 120, zoom: 6.5 },
+      { label: 'Kyiv', hint: 'Capital', lat: 50.45, lng: 30.52, zoom: 9 },
+      { label: 'Moscow', hint: 'Capital', lat: 55.75, lng: 37.62, zoom: 9 },
+    ];
+    for (const n of NAV) {
+      cmds.push({ id: `nav:${n.label}`, group: 'NAVIGATE', title: `Fly to ${n.label}`, subtitle: n.hint, keywords: `go navigate ${n.label}`, icon: <Crosshair className="w-4 h-4" />, run: () => flyTo(n.lat, n.lng, n.zoom) });
+    }
+    cmds.push(
+      { id: 'panel:recon', group: 'TOOLS', title: 'Open RECON / OSINT Toolkit', subtitle: 'Scanner · WHOIS · DNS', keywords: 'recon osint scanner', icon: <Radar className="w-4 h-4" />, run: () => { closeRightPanels(); setShowIntel(true); } },
+      { id: 'panel:markets', group: 'TOOLS', title: 'Open Markets & Intel', subtitle: 'Indices · commodities', keywords: 'markets stocks', icon: <BarChart3 className="w-4 h-4" />, run: () => { closeRightPanels(); setShowMarkets(true); } },
+      { id: 'panel:alerts', group: 'TOOLS', title: 'Open Live Alerts', subtitle: 'Real-time event stream', keywords: 'alerts warnings', icon: <AlertTriangle className="w-4 h-4" />, run: () => { closeRightPanels(); setShowAlerts(true); } },
+      { id: 'panel:graph', group: 'TOOLS', title: 'Open Entity Graph', subtitle: 'Link analysis & fusion', keywords: 'entity graph network', icon: <Network className="w-4 h-4" />, run: () => { closeRightPanels(); setShowEntityGraph(true); } },
+      { id: 'disp:proj', group: 'DISPLAY', title: mapProjection === 'globe' ? 'Switch to 2D Map' : 'Switch to 3D Globe', subtitle: 'Map projection', keywords: 'globe mercator 2d 3d', icon: <Globe className="w-4 h-4" />, badge: mapProjection === 'globe' ? 'GLOBE' : 'FLAT', active: mapProjection === 'globe', keepOpen: true, run: () => setMapProjection(p => p === 'globe' ? 'mercator' : 'globe') },
+      { id: 'disp:style', group: 'DISPLAY', title: mapStyle === 'dark' ? 'Satellite Imagery' : 'Night / Dark Basemap', subtitle: 'Basemap style', keywords: 'satellite dark basemap', icon: <Satellite className="w-4 h-4" />, badge: mapStyle === 'satellite' ? 'SAT' : 'DARK', active: mapStyle === 'satellite', keepOpen: true, run: () => setMapStyle(s => s === 'dark' ? 'satellite' : 'dark') },
+      { id: 'disp:theme', group: 'DISPLAY', title: osirisTheme === 'ghost' ? 'Core Protocol (Gold)' : 'Ghost Protocol (Violet)', subtitle: 'Interface theme', keywords: 'theme ghost core gold violet', icon: <Moon className="w-4 h-4" />, badge: osirisTheme === 'ghost' ? 'GHOST' : 'CORE', active: osirisTheme === 'ghost', keepOpen: true, run: () => setOsirisTheme(t => t === 'core' ? 'ghost' : 'core') },
+      { id: 'disp:fs', group: 'DISPLAY', title: 'Toggle Fullscreen', subtitle: 'Immersive mode', keywords: 'fullscreen', icon: <MapPinned className="w-4 h-4" />, run: toggleFullscreen },
+    );
+    return cmds;
+  }, [activeLayers, mapProjection, mapStyle, osirisTheme, flyTo, closeRightPanels, toggleFullscreen]);
+
   const totalFlights = useMemo(() => (
     (data.commercial_flights?.length||0)+(data.private_flights?.length||0)+(data.private_jets?.length||0)+(data.military_flights?.length||0)
   ), [data.commercial_flights, data.private_flights, data.private_jets, data.military_flights]);
@@ -1366,7 +1431,7 @@ export default function Dashboard() {
 
         {/* Entity graph (Intelligence Layer) toggle */}
         <div className="relative group">
-          <button onClick={() => { setShowEntityGraph(!showEntityGraph); setShowIntel(false); setShowMarkets(false); setShowAlerts(false); setShowSearch(false); }} className={`w-8 h-8 rounded-full flex items-center justify-center transition-colors ${showEntityGraph ? 'bg-[#D4AF37]/20' : 'hover:bg-white/10'}`}>
+          <button onClick={() => { setShowEntityGraph(!showEntityGraph); setShowIntel(false); setShowMarkets(false); setShowAlerts(false); setShowSearch(false); setShowFusion(false); }} className={`w-8 h-8 rounded-full flex items-center justify-center transition-colors ${showEntityGraph ? 'bg-[#D4AF37]/20' : 'hover:bg-white/10'}`}>
             <Network className={`w-4 h-4 ${showEntityGraph ? 'text-[#D4AF37]' : 'text-white/60'}`} />
           </button>
         </div>
@@ -1384,6 +1449,18 @@ export default function Dashboard() {
             <span className="absolute -top-1 -right-1 min-w-[14px] h-3.5 px-0.5 rounded-full bg-[#FF3D3D] text-white text-[7px] font-mono font-bold flex items-center justify-center pointer-events-none">
               {unreadCount > 99 ? '99+' : unreadCount}
             </span>
+          )}
+        </div>
+
+        {/* Threat Fusion HUD toggle */}
+        <div className="relative group">
+          <button onClick={() => { setShowFusion(f => !f); setShowIntel(false); setShowMarkets(false); setShowAlerts(false); setShowSearch(false); setShowEntityGraph(false); }} className={`w-8 h-8 rounded-full flex items-center justify-center transition-colors ${showFusion ? 'bg-[#FF1744]/20' : 'hover:bg-white/10'}`} title="Global Threat Fusion">
+            <Activity className={`w-4 h-4 ${showFusion ? 'text-[#FF1744]' : 'text-white/60'}`} />
+          </button>
+          {showFusion && (
+            <div className="absolute right-12 top-0">
+              <ThreatFusionHUD onLocate={(lat: number, lng: number) => { setFlyToLocation({ lat, lng, ts: Date.now() }); setMapView(v => ({ ...v, zoom: Math.max(v.zoom, 5) })); }} />
+            </div>
           )}
         </div>
 
@@ -1732,6 +1809,7 @@ export default function Dashboard() {
       ))}
 
       {/* Keyboard Shortcuts Overlay */}
+      <CommandPalette commands={paletteCommands} />
       <KeyboardShortcuts />
 
       {/* ── CONFLICT EVENTS CONFIDENCE LEGEND ── */}
