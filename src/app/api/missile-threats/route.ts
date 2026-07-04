@@ -143,7 +143,7 @@ export async function GET() {
           sources: [...new Set(allWps.map(w => `t.me/${w.channel}`))],
         });
       }
-      cached = { routes: seedRoutes, total: seedRoutes.length, window_hours: WINDOW_HOURS, timestamp: new Date().toISOString() };
+      cached = { routes: seedRoutes, alarm_vectors: seedRoutes.flatMap(r => r.waves), total: seedRoutes.length, window_hours: WINDOW_HOURS, timestamp: new Date().toISOString() };
     }
   }
 
