@@ -5,6 +5,7 @@ import os from 'os';
 import path from 'path';
 import { stealthFetch } from '@/lib/stealthFetch';
 import { DISTRICT_COORDS } from './district-coords';
+import { rayonNameToKey } from '@/lib/raion-lookup';
 
 // ---------------------------------------------------------------------------
 // Persistence — ~/.osiris-data/air-raid-history.json
@@ -106,7 +107,18 @@ type EnrichedAlert = {
   startedAt: string;
   lat: number | null;
   lng: number | null;
+  neptunConfirmed?: boolean; // district-level only — raion also active per Neptune.in.ua
 };
+
+// Best-effort internal self-fetch — never throws; corroboration is additive.
+async function fetchNeptunActiveKeys(req: Request): Promise<Set<string>> {
+  try {
+    const res = await fetch(new URL('/api/neptun-alerts', req.url), { signal: AbortSignal.timeout(5000) });
+    if (!res.ok) return new Set();
+    const j = await res.json();
+    return new Set(Array.isArray(j?.activeKeys) ? j.activeKeys : []);
+  } catch { return new Set(); }
+}
 
 export async function GET(req: Request) {
   // -------------------------------------------------------------------------
@@ -143,6 +155,11 @@ export async function GET(req: Request) {
     const alerts: EnrichedAlert[] = [];
     const activeOblasts: string[] = [];
 
+    const [neptunKeys, nameToKey] = await Promise.all([
+      fetchNeptunActiveKeys(req),
+      rayonNameToKey(),
+    ]);
+
     for (const [stateName, state] of Object.entries(states)) {
       const info = OBLAST_INFO[stateName];
       const oblastEn = info?.en ?? stateName;
@@ -168,6 +185,7 @@ export async function GET(req: Request) {
       for (const [districtName, district] of Object.entries(state.districts ?? {})) {
         if (!district.enabled) continue;
         const coords = DISTRICT_COORDS[districtName] ?? null;
+        const neptunKey = nameToKey.get(districtName);
         alerts.push({
           regionId: null,
           regionName: districtName,
@@ -175,6 +193,7 @@ export async function GET(req: Request) {
           level: 'district',
           oblast: oblastEn,
           alertType: 'AIR',
+          neptunConfirmed: neptunKey ? neptunKeys.has(neptunKey) : false,
           startedAt: district.enabled_at ?? '',
           lat: coords ? coords[1] : null,
           lng: coords ? coords[0] : null,

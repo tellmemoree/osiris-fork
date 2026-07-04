@@ -260,7 +260,6 @@ export default function Dashboard() {
     drone_threats: false,
     missile_threats: false,
     alarm_vectors: false,
-    neptun_raion_alerts: false,
     missile_cruise:     true,
     missile_ballistic:  true,
     missile_kinzhal:    true,
@@ -603,9 +602,8 @@ export default function Dashboard() {
     oblast_pressure: () => fetchEndpoint('/api/oblast-pressure', (d: any) => ({ oblast_pressure: d.oblasts ?? [] })),
     shadow_fleet_tracks: () => fetchEndpoint('/api/maritime?tracks=1', (d: any) => ({ shadow_fleet_tracks: d.tracks ?? [] })),
     mig31k: () => fetchEndpoint('/api/mig31k', d => ({ mig31k: { detections: d.detections ?? [], updatedAt: d.timestamp } })).then(() => setLayerTimestamps(p => ({ ...p, mig31k: Date.now() }))),
-    neptun_alerts: () => fetchEndpoint('/api/neptun-alerts', (d: any) => ({ neptun_alerts: { updatedAt: d?.updatedAt ?? null, activeKeys: Array.isArray(d?.activeKeys) ? d.activeKeys : [] } })),
-    correlated_events: () => fetchEndpoint('/api/correlated-events', d => ({ correlated_events: d.events ?? [] })).then(() => setLayerTimestamps(p => ({ ...p, correlated_events: Date.now() }))),
     railway_incidents: () => fetchEndpoint('/api/railway-incidents', d => ({ railway_incidents_geo: d.features || [] })),
+    correlated_events: () => fetchEndpoint('/api/correlated-events', d => ({ correlated_events: d.events ?? [] })).then(() => setLayerTimestamps(p => ({ ...p, correlated_events: Date.now() }))),
   }), [fetchEndpoint]);
 
   // Fetch a source at most once (does NOT toggle the layer on).
@@ -676,9 +674,8 @@ export default function Dashboard() {
     if (activeLayers.oblast_pressure) loadOnce('oblast_pressure');
     if (activeLayers.shadow_fleet_tracks) loadOnce('shadow_fleet_tracks');
     if (activeLayers.mig31k) loadOnce('mig31k');
-    if (activeLayers.neptun_raion_alerts) loadOnce('neptun_alerts');
-    if (activeLayers.correlated_events) loadOnce('correlated_events');
     if ((activeLayers as any).railway_incidents) loadOnce('railway_incidents');
+    if (activeLayers.correlated_events) loadOnce('correlated_events');
   }, [activeLayers, loadOnce]);
 
   // Background pre-fetch: populate LayerPanel counts for every layer
@@ -789,9 +786,6 @@ export default function Dashboard() {
     }
     if (activeLayers.mig31k) {
       intervals.push(setInterval(() => fetchEndpoint('/api/mig31k', d => ({ mig31k: { detections: d.detections ?? [], updatedAt: d.timestamp } })).then(() => setLayerTimestamps(p => ({ ...p, mig31k: Date.now() }))), 60000)); // 1 min
-    }
-    if (activeLayers.neptun_raion_alerts) {
-      intervals.push(setInterval(() => fetchEndpoint('/api/neptun-alerts', (d: any) => ({ neptun_alerts: { updatedAt: d?.updatedAt ?? null, activeKeys: Array.isArray(d?.activeKeys) ? d.activeKeys : [] } })), 60000));
     }
     if ((activeLayers as any).railway_incidents) {
       intervals.push(setInterval(() => fetchEndpoint('/api/railway-incidents', d => ({ railway_incidents_geo: d.features || [] })), 300000)); // 5 min

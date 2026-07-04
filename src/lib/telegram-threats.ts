@@ -12,6 +12,7 @@
  */
 
 import { stealthFetch } from '@/lib/stealthFetch';
+import { findBestPlace } from '@/lib/conflict-geo';
 
 // ── channels ────────────────────────────────────────────────────────────────
 
@@ -58,11 +59,13 @@ export interface RouteWaypoint {
   lat: number;
   lng: number;
   oblast: string;
+  place?: string; // city/village named in the text, if more specific than the oblast centroid
   ts: string;     // ISO
   text: string;
   channel: string;
-  alarmConfirmed?: boolean; // true when air-raid history records this oblast alarmed near ts
-  confidence?: number;      // number of distinct channels that reported this waypoint's wave
+  alarmConfirmed?: boolean;  // true when air-raid history records this oblast alarmed near ts
+  neptunConfirmed?: boolean; // true when Neptune.in.ua reports the containing raion active (drone routes only)
+  confidence?: number;       // number of distinct channels that reported this waypoint's wave
 }
 
 export interface RouteWave {
@@ -616,10 +619,16 @@ export function buildRoute(messages: TgMessage[], weaponType: WeaponType): Route
       continue;
     }
 
+    // A city/village named in the text is more precise than the oblast
+    // centroid — use it for the pin, but keep `oblast` (above) as the wave's
+    // dedup identity so consecutive same-oblast messages still collapse into
+    // one waypoint instead of the route jittering between every named town.
+    const place = findBestPlace(msg.text);
     current.push({
-      lat:     ref.coords[1],
-      lng:     ref.coords[0],
+      lat:     place ? place.coords[0] : ref.coords[1],
+      lng:     place ? place.coords[1] : ref.coords[0],
       oblast:  ref.oblast,
+      place:   place?.name,
       ts:      new Date(msg.ts).toISOString(),
       text:    msg.text.length > 120 ? msg.text.slice(0, 120) + '…' : msg.text,
       channel: msg.channel,

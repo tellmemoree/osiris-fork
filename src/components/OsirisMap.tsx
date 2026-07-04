@@ -436,17 +436,6 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
         paint: { 'line-color': '#FF7043', 'line-width': 1.2, 'line-opacity': 0.6 },
       });
 
-      // Neptune.in.ua raion-level air alerts — static boundary set, filter updated per poll.
-      map.addSource('neptun-raions', { type: 'geojson', data: '/raions.geojson' });
-      map.addLayer({ id: 'neptun-raion-fill', type: 'fill', source: 'neptun-raions',
-        filter: ['in', ['get', 'key'], ['literal', []]],
-        paint: { 'fill-color': '#FF1744', 'fill-opacity': 0.35 }
-      });
-      map.addLayer({ id: 'neptun-raion-outline', type: 'line', source: 'neptun-raions',
-        filter: ['in', ['get', 'key'], ['literal', []]],
-        paint: { 'line-color': '#FF1744', 'line-width': 1, 'line-opacity': 0.4 }
-      });
-
       // Frontline (DeepState/Militaryland) — occupied-zone fills + outlines. Uses
       // each feature's own DeepState style colors; fills sit under the dot/label
       // layers added below so markers stay legible.
@@ -639,18 +628,19 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
       map.addLayer({ id: 'drone-route-nodes', type: 'circle', source: 'drone-route',
         filter: ['==', ['geometry-type'], 'Point'],
         paint: {
-          // Gate: alarmConfirmed OR confidence >= 2 (corroborated by 2+ channels) → full treatment.
-          // Mirrors missile-route-nodes gate exactly; drone color palette (purple) is kept.
-          'circle-radius': ['case', ['any', ['boolean', ['get', 'alarmConfirmed'], false], ['>=', ['coalesce', ['get', 'confidence'], 1], 2]], 6, 4],
+          // Gate: alarmConfirmed OR neptunConfirmed OR confidence >= 2 (corroborated
+          // by 2+ channels) → full treatment. Mirrors missile-route-nodes gate;
+          // drone color palette (purple) is kept.
+          'circle-radius': ['case', ['any', ['boolean', ['get', 'alarmConfirmed'], false], ['boolean', ['get', 'neptunConfirmed'], false], ['>=', ['coalesce', ['get', 'confidence'], 1], 2]], 6, 4],
           'circle-color': '#CE93D8',
-          'circle-opacity': ['case', ['any', ['boolean', ['get', 'alarmConfirmed'], false], ['>=', ['coalesce', ['get', 'confidence'], 1], 2]], 1.0, 0.8],
-          'circle-stroke-width': ['case', ['any', ['boolean', ['get', 'alarmConfirmed'], false], ['>=', ['coalesce', ['get', 'confidence'], 1], 2]], 2.5, 1.5],
-          'circle-stroke-color': ['case', ['any', ['boolean', ['get', 'alarmConfirmed'], false], ['>=', ['coalesce', ['get', 'confidence'], 1], 2]], '#FF1744', '#E040FB'],
-          'circle-stroke-opacity': ['case', ['any', ['boolean', ['get', 'alarmConfirmed'], false], ['>=', ['coalesce', ['get', 'confidence'], 1], 2]], 1.0, 0.7],
+          'circle-opacity': ['case', ['any', ['boolean', ['get', 'alarmConfirmed'], false], ['boolean', ['get', 'neptunConfirmed'], false], ['>=', ['coalesce', ['get', 'confidence'], 1], 2]], 1.0, 0.8],
+          'circle-stroke-width': ['case', ['any', ['boolean', ['get', 'alarmConfirmed'], false], ['boolean', ['get', 'neptunConfirmed'], false], ['>=', ['coalesce', ['get', 'confidence'], 1], 2]], 2.5, 1.5],
+          'circle-stroke-color': ['case', ['any', ['boolean', ['get', 'alarmConfirmed'], false], ['boolean', ['get', 'neptunConfirmed'], false], ['>=', ['coalesce', ['get', 'confidence'], 1], 2]], '#FF1744', '#E040FB'],
+          'circle-stroke-opacity': ['case', ['any', ['boolean', ['get', 'alarmConfirmed'], false], ['boolean', ['get', 'neptunConfirmed'], false], ['>=', ['coalesce', ['get', 'confidence'], 1], 2]], 1.0, 0.7],
         }});
       map.addLayer({ id: 'drone-route-label', type: 'symbol', source: 'drone-route', minzoom: 4,
         filter: ['all', ['==', ['geometry-type'], 'Point'], ['==', ['get', 'isLatest'], true]],
-        layout: { 'text-field': ['concat', 'DRONE ', ['get', 'oblast']], 'text-size': 9, 'text-font': ['Open Sans Regular'], 'text-offset': [0, 1.9], 'text-allow-overlap': false },
+        layout: { 'text-field': ['concat', 'DRONE ', ['coalesce', ['get', 'place'], ['get', 'oblast']]], 'text-size': 9, 'text-font': ['Open Sans Regular'], 'text-offset': [0, 1.9], 'text-allow-overlap': false },
         paint: { 'text-color': '#CE93D8', 'text-halo-color': '#000', 'text-halo-width': 1 }});
 
       // Missile Threat Routes — one route per weapon type (CRUISE, BALLISTIC, KINZHAL, KH22).
@@ -1604,13 +1594,14 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
       const waveLabel = p.waveIndex > 0 ? ` · Wave ${p.waveIndex + 1}` : '';
       popup(coords, `<div style="${pStyle}border:1px solid rgba(206,147,216,0.45);max-width:300px;">
         <div style="color:#CE93D8;font-size:13px;font-weight:700;margin-bottom:6px;">🚁 DRONE / UAV${waveLabel}</div>
-        <div style="font-size:11px;color:#E8E6E0;margin-bottom:2px;">${esc(p.oblast)||'Unknown region'}</div>
+        <div style="font-size:11px;color:#E8E6E0;margin-bottom:2px;">${esc(p.place) ? esc(p.place) + ' — ' + esc(p.oblast) : esc(p.oblast)||'Unknown region'}</div>
         <div style="font-size:9px;color:#5C5A54;margin-bottom:8px;">Waypoint ${p.sequence||'?'} · last 1.5h · OSINT Telegram</div>
         <div style="font-size:10px;color:#C8C6C0;line-height:1.35;margin-bottom:8px;border-left:2px solid rgba(206,147,216,0.4);padding-left:6px;">${esc(p.text)}</div>
         <div style="display:grid;grid-template-columns:1fr;gap:4px;font-size:9px;">
           <div><span style="color:#5C5A54;">REPORTED</span><br/><span style="color:#E8E6E0;">${p.ts ? new Date(p.ts).toUTCString().slice(5,17)+' UTC' : '—'}</span></div>
         </div>
         ${p.alarmConfirmed ? '<div style="margin-top:6px;padding:3px 6px;background:rgba(255,23,68,0.15);border:1px solid rgba(255,23,68,0.4);border-radius:3px;color:#FF1744;font-size:8px;font-weight:700;letter-spacing:0.05em;">AIR RAID ALARM CORROBORATED</div>' : ''}
+        ${p.neptunConfirmed ? '<div style="margin-top:6px;padding:3px 6px;background:rgba(255,107,107,0.15);border:1px solid rgba(255,107,107,0.4);border-radius:3px;color:#FF6B6B;font-size:8px;font-weight:700;letter-spacing:0.05em;">NEPTUNE RAION CONFIRMED</div>' : ''}
         <div style="font-size:8px;color:#5C5A54;margin-top:8px;font-style:italic;">Confirmed sighting signal — verify before acting.</div>
       </div>`);
     });
@@ -2729,19 +2720,6 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
     map.setPaintProperty('pressure-oblast-fill', 'fill-opacity', opacityExpr);
   }, [mapReady, data.oblast_pressure, activeLayers.oblast_pressure, setGeo]);
 
-  // Neptune raion-level air alerts — binary fill using setFilter (not setData).
-  useEffect(() => {
-    if (!mapReady) return;
-    const map = mapRef.current;
-    if (!map?.getLayer('neptun-raion-fill')) return;
-    const keys: string[] =
-      activeLayers.neptun_raion_alerts && Array.isArray(data.neptun_alerts?.activeKeys)
-        ? data.neptun_alerts.activeKeys
-        : [];
-    map.setFilter('neptun-raion-fill',    ['in', ['get', 'key'], ['literal', keys]]);
-    map.setFilter('neptun-raion-outline', ['in', ['get', 'key'], ['literal', keys]]);
-  }, [mapReady, data.neptun_alerts, activeLayers.neptun_raion_alerts]);
-
   // KAB / glide-bomb threats (Telegram-derived, oblast-level point markers).
   useEffect(() => {
     if (!mapReady) return;
@@ -2824,7 +2802,7 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
         features.push({
           type: 'Feature',
           geometry: { type: 'Point', coordinates: [w.lng, w.lat] },
-          properties: { oblast: w.oblast, ts: w.ts, text: w.text, isLatest: i === wps.length - 1, sequence: i + 1, waveIndex: wave.waveIndex, alarmConfirmed: !!w.alarmConfirmed, confidence: (w as any).confidence ?? 1 },
+          properties: { oblast: w.oblast, place: w.place, ts: w.ts, text: w.text, isLatest: i === wps.length - 1, sequence: i + 1, waveIndex: wave.waveIndex, alarmConfirmed: !!w.alarmConfirmed, neptunConfirmed: !!w.neptunConfirmed, confidence: (w as any).confidence ?? 1 },
         });
       });
     }
@@ -3100,7 +3078,6 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
     setVis(['drone-route-line','drone-route-arrows','drone-route-nodes','drone-route-label'], activeLayers.drone_threats);
     setVis(['missile-route-line','missile-route-arrows','missile-route-nodes','missile-route-label'], activeLayers.missile_threats);
     setVis(['alarm-vector-line','alarm-vector-arrow','alarm-vector-label'], activeLayers.alarm_vectors);
-    setVis(['neptun-raion-fill','neptun-raion-outline'], activeLayers.neptun_raion_alerts);
     setVis(['ru-raid-glow','ru-raid-dots','ru-raid-label'], activeLayers.ru_air_raids);
     setVis(['thermal-aoi-glow','thermal-aoi-dots','thermal-aoi-label','thermal-aoi-unconfirmed-label'], activeLayers.thermal_aoi);
     setVis(['capture-glow','capture-dots'], activeLayers.captures);

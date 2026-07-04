@@ -517,6 +517,29 @@ export const COMPILED_PLACE_GAZETTEER: Array<{
 }));
 
 /**
+ * Resolve the most specific place a text is about, keeping the matched
+ * gazetteer keyword alongside the coords (callers that only need the point
+ * should use findPlaceCoords below).
+ * Prefers city/town over country centroid; among equally specific matches
+ * picks the one mentioned first.
+ *
+ * coords are [lat, lng] -- NOT GeoJSON order. Callers must not swap.
+ */
+export function findBestPlace(text: string): { coords: [number, number]; name: string } | null {
+  const lower = text.toLowerCase();
+  let best: { coords: [number, number]; name: string; rank: number; pos: number } | null = null;
+  for (const { re, coords, rank, keyword } of COMPILED_PLACE_GAZETTEER) {
+    const m = re.exec(lower);
+    if (!m) continue;
+    const pos = m.index;
+    if (!best || rank > best.rank || (rank === best.rank && pos < best.pos)) {
+      best = { coords, name: keyword, rank, pos };
+    }
+  }
+  return best ? { coords: best.coords, name: best.name } : null;
+}
+
+/**
  * Resolve the most specific place a text is about.
  * Prefers city/town over country centroid; among equally specific matches
  * picks the one mentioned first.
@@ -524,17 +547,7 @@ export const COMPILED_PLACE_GAZETTEER: Array<{
  * Returns [lat, lng] -- NOT GeoJSON order. Callers must not swap.
  */
 export function findPlaceCoords(text: string): [number, number] | null {
-  const lower = text.toLowerCase();
-  let best: { coords: [number, number]; rank: number; pos: number } | null = null;
-  for (const { re, coords, rank } of COMPILED_PLACE_GAZETTEER) {
-    const m = re.exec(lower);
-    if (!m) continue;
-    const pos = m.index;
-    if (!best || rank > best.rank || (rank === best.rank && pos < best.pos)) {
-      best = { coords, rank, pos };
-    }
-  }
-  return best ? best.coords : null;
+  return findBestPlace(text)?.coords ?? null;
 }
 
 /**

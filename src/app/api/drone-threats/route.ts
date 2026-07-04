@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { getThreatCorpus, classifyWeapons, matchOblasts, buildRoute, extractUAVCount } from '@/lib/telegram-threats';
 import type { RouteWave } from '@/lib/telegram-threats';
 import { findAllNamedPlaces } from '@/lib/conflict-geo';
+import { raionKeyForPoint } from '@/lib/raion-lookup';
 import { readAlarmHistory, isOblastAlarmed, buildAlarmVectors } from '@/lib/alarm-history';
 import type { AlarmVector } from '@/lib/alarm-history';
 import {
@@ -41,6 +42,18 @@ interface DroneEvent {
   startedAt:   string;
   text:        string;
   sources:     string[];
+  neptunConfirmed?: boolean; // city-level only — raion containing this point also active per Neptune.in.ua
+}
+
+// Best-effort internal self-fetch — never throws; corroboration is additive.
+async function fetchNeptunActiveKeys(): Promise<Set<string>> {
+  try {
+    const base = process.env.OSIRIS_SELF_ORIGIN ?? 'http://127.0.0.1:3000';
+    const res = await fetch(`${base}/api/neptun-alerts`, { signal: AbortSignal.timeout(5000) });
+    if (!res.ok) return new Set();
+    const j = await res.json();
+    return new Set(Array.isArray(j?.activeKeys) ? j.activeKeys : []);
+  } catch { return new Set(); }
 }
 
 interface DroneResponse {
@@ -124,33 +137,48 @@ async function buildDroneResponse(): Promise<DroneResponse> {
     }
   }
 
+  // City-level markers only — an oblast centroid isn't precise enough to attribute
+  // to one specific raion, so oblast-level entries skip Neptune corroboration.
+  const cityEntries = Array.from(agg.values()).filter(a => a.level === 'city');
+  const [neptunKeys, cityRaionKeys] = await Promise.all([
+    fetchNeptunActiveKeys(),
+    Promise.all(cityEntries.map(a => raionKeyForPoint(a.lat, a.lng))),
+  ]);
+  const raionKeyByCity = new Map(cityEntries.map((a, i) => [a, cityRaionKeys[i]]));
+
   const threats: DroneEvent[] = Array.from(agg.values())
-    .map((a) => ({
-      oblast:     a.oblast,
-      regionName: a.regionName,
-      level:      a.level,
-      alertType:  'DRONE'  as const,
-      lat:        a.lat,
-      lng:        a.lng,
-      count:      a.count,
-      startedAt:  new Date(a.latestTs).toISOString(),
-      text:       a.latestText.length > 220 ? a.latestText.slice(0, 220) + '…' : a.latestText,
-      sources:    Array.from(a.sources).map((s) => `t.me/${s}`),
-    }))
+    .map((a) => {
+      const raionKey = raionKeyByCity.get(a);
+      return {
+        oblast:     a.oblast,
+        regionName: a.regionName,
+        level:      a.level,
+        alertType:  'DRONE'  as const,
+        lat:        a.lat,
+        lng:        a.lng,
+        count:      a.count,
+        startedAt:  new Date(a.latestTs).toISOString(),
+        text:       a.latestText.length > 220 ? a.latestText.slice(0, 220) + '…' : a.latestText,
+        sources:    Array.from(a.sources).map((s) => `t.me/${s}`),
+        neptunConfirmed: raionKey ? neptunKeys.has(raionKey) : false,
+      };
+    })
     .sort((x, y) => new Date(y.startedAt).getTime() - new Date(x.startedAt).getTime());
 
-  // Build current-corpus waves and annotate with alarm history; build alarm
-  // vectors in parallel (reads from disk — no upstream fetch).
+  // Build current-corpus waves and annotate with alarm + Neptune raion history;
+  // build alarm vectors in parallel (reads from disk — no upstream fetch).
   const currentWaves = buildRoute(messages, 'DRONE');
-  const [alarmHistory, alarmVectors] = await Promise.all([
+  const allWaypoints = currentWaves.flatMap(w => w.waypoints);
+  const [alarmHistory, alarmVectors, waypointRaionKeys] = await Promise.all([
     readAlarmHistory(),
     buildAlarmVectors(),
+    Promise.all(allWaypoints.map(wp => raionKeyForPoint(wp.lat, wp.lng))),
   ]);
-  for (const wave of currentWaves) {
-    for (const wp of wave.waypoints) {
-      wp.alarmConfirmed = isOblastAlarmed(wp.oblast, wp.ts, alarmHistory);
-    }
-  }
+  allWaypoints.forEach((wp, i) => {
+    wp.alarmConfirmed = isOblastAlarmed(wp.oblast, wp.ts, alarmHistory);
+    const raionKey = waypointRaionKeys[i];
+    wp.neptunConfirmed = raionKey ? neptunKeys.has(raionKey) : false;
+  });
 
   // UAV count: apply after buildRoute() so messages are already deduplicated
   // at the corpus level; extractUAVCount takes MAX across all drone messages.
