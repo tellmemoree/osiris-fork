@@ -121,12 +121,20 @@ export async function mergeAndSaveTracks(
   const cutoff  = Date.now() - ttlMs;
   const existing = (await loadTrackEntries(file)).filter(e => e.ts > cutoff);
 
-  const seen = new Set(existing.map(e => dedupKey(e)));
+  const byKey = new Map(existing.map(e => [dedupKey(e), e]));
   for (const entry of incoming) {
     const key = dedupKey(entry);
-    if (!seen.has(key)) {
+    const stored = byKey.get(key);
+    if (!stored) {
       existing.push(entry);
-      seen.add(key);
+      byKey.set(key, entry);
+    } else if (entry.place && !stored.place) {
+      // Backfill fields a schema/geocoding change added after this entry was first
+      // persisted — dedup keeps the first-seen copy forever, so without this an
+      // entry scraped before a fix (e.g. city-level place resolution) ships would
+      // never pick up the richer data even when the same message is rescraped.
+      stored.place = entry.place;
+      stored.neptunConfirmed = entry.neptunConfirmed;
     }
   }
 
