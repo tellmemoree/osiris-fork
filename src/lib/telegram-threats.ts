@@ -88,7 +88,7 @@ export const OBLAST_REFS: OblastRef[] = [
   { oblast: 'Kyiv oblast',           coords: [30.523, 50.450], tokens: ['київщ', 'київськ', 'kyivsk', 'бровар', 'бориспіл', 'vasylkiv', 'васильків'] },
   { oblast: 'Kyiv City',             coords: [30.523, 50.450], tokens: ['kyiv', 'київ'] },
   { oblast: 'Zhytomyr oblast',       coords: [28.658, 50.255], tokens: ['житомирщ', 'житомир', 'zhytomyr', 'бердичів', 'коростень'] },
-  { oblast: 'Rivne oblast',          coords: [26.251, 50.620], tokens: ['рівненщ', 'рівн', 'rivne', 'рівного', 'рівному'] },
+  { oblast: 'Rivne oblast',          coords: [26.251, 50.620], tokens: ['рівненщ', 'rivne', 'рівного', 'рівному'] },
   { oblast: 'Vinnytsia oblast',      coords: [28.468, 49.233], tokens: ['вінниц', 'вінниці', 'vinnytsia', 'вінниця', 'жмеринк'] },
   { oblast: 'Khmelnytskyi oblast',   coords: [26.987, 49.423], tokens: ['хмельниц', 'khmelnytsk', 'хмельницьк', "кам'янець"] },
   { oblast: 'Kirovohrad oblast',     coords: [32.262, 48.508], tokens: ['кіровоград', 'kirovohrad', 'кропивниц', 'kropyvnytsk'] },
@@ -504,7 +504,7 @@ const ANALYSIS_PATTERNS: RegExp[] = [
   /середн\p{L}+\s+рівен/iu,            // "medium level"
 ];
 
-function isAnalysis(text: string): boolean {
+export function isAnalysis(text: string): boolean {
   return ANALYSIS_PATTERNS.some(re => re.test(text));
 }
 

@@ -6,6 +6,7 @@ import {
   loadTrackEntries, mergeAndSaveTracks,
   type TrackEntry,
 } from '@/lib/threat-tracks';
+import { isAnalysis } from '@/lib/telegram-threats';
 
 export const dynamic = 'force-dynamic';
 
@@ -72,7 +73,7 @@ const OBLAST_REFS: OblastRef[] = [
   { oblast: 'Kyiv oblast', coords: [30.523, 50.450], tokens: ['київщ', 'київськ', 'kyivsk', 'бровар', 'бориспіл', 'vasylkiv', 'васильків'] },
   { oblast: 'Kyiv City', coords: [30.523, 50.450], tokens: ['kyiv', 'київ'] },
   { oblast: 'Zhytomyr oblast', coords: [28.658, 50.255], tokens: ['житомирщ', 'житомир', 'zhytomyr', 'бердичів', 'коростень'] },
-  { oblast: 'Rivne oblast', coords: [26.251, 50.620], tokens: ['рівненщ', 'рівн', 'rivne', 'рівного', 'рівному'] },
+  { oblast: 'Rivne oblast', coords: [26.251, 50.620], tokens: ['рівненщ', 'rivne', 'рівного', 'рівному'] },
   { oblast: 'Vinnytsia oblast', coords: [28.468, 49.233], tokens: ['вінниц', 'вінниці', 'vinnytsia', 'вінниця', 'жмеринк'] },
   { oblast: 'Khmelnytskyi oblast', coords: [26.987, 49.423], tokens: ['хмельниц', 'khmelnytsk', 'хмельницьк', "кам'янець"] },
   { oblast: 'Kirovohrad oblast', coords: [32.262, 48.508], tokens: ['кіровоград', 'kirovohrad', 'кропивниц', 'kropyvnytsk'] },
@@ -254,6 +255,7 @@ async function buildThreats(): Promise<KabResponse> {
     for (const msg of m) {
       if (msg.ts < cutoff) continue;
       if (!isKab(msg.text)) continue;
+      if (isAnalysis(msg.text)) continue;
       const refs = matchOblasts(msg.text.toLowerCase());
       if (refs.length === 0) continue;
 
