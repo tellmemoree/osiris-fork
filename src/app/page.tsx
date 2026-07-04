@@ -259,6 +259,7 @@ export default function Dashboard() {
     mig31k: false,
     railway_network: false,
     railway_incidents: false,
+    correlated_events: false,
   });
   // Persist active layer toggles across restarts — read on mount, write on every change.
   // Skip the first write (count=1, initial defaults) so we don't overwrite saved state
@@ -279,6 +280,10 @@ export default function Dashboard() {
   const sessionDisabledRef = useRef(sessionDisabled);
   useEffect(() => { activeLayersRef.current = activeLayers; }, [activeLayers]);
   useEffect(() => { sessionDisabledRef.current = sessionDisabled; }, [sessionDisabled]);
+  // LayerPanel correlated_events toggle also opens the ThreatTimeline panel.
+  useEffect(() => {
+    if (activeLayers.correlated_events) setShowThreatTimeline(true);
+  }, [activeLayers.correlated_events]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const [liveFeedUrl, setLiveFeedUrl] = useState<string | null>(null);
   const [liveFeedName, setLiveFeedName] = useState('');
@@ -583,6 +588,7 @@ export default function Dashboard() {
     mig31k: () => fetchEndpoint('/api/mig31k', d => ({ mig31k: { detections: d.detections ?? [], updatedAt: d.timestamp } })).then(() => setLayerTimestamps(p => ({ ...p, mig31k: Date.now() }))),
     neptun_alerts: () => fetchEndpoint('/api/neptun-alerts', (d: any) => ({ neptun_alerts: { updatedAt: d?.updatedAt ?? null, activeKeys: Array.isArray(d?.activeKeys) ? d.activeKeys : [] } })),
     railway_incidents: () => fetchEndpoint('/api/railway-incidents', d => ({ railway_incidents_geo: d.features || [] })),
+    correlated_events: () => fetchEndpoint('/api/correlated-events', d => ({ correlated_events: d.events ?? [] })).then(() => setLayerTimestamps(p => ({ ...p, correlated_events: Date.now() }))),
   }), [fetchEndpoint]);
 
   // Fetch a source at most once (does NOT toggle the layer on).
@@ -655,6 +661,7 @@ export default function Dashboard() {
     if (activeLayers.mig31k) loadOnce('mig31k');
     if (activeLayers.neptun_raion_alerts) loadOnce('neptun_alerts');
     if ((activeLayers as any).railway_incidents) loadOnce('railway_incidents');
+    if (activeLayers.correlated_events) loadOnce('correlated_events');
   }, [activeLayers, loadOnce]);
 
   // Background pre-fetch: populate LayerPanel counts for every layer
@@ -747,6 +754,9 @@ export default function Dashboard() {
     }
     if (activeLayers.shadow_fleet_tracks) {
       intervals.push(setInterval(() => fetchEndpoint('/api/maritime?tracks=1', (d: any) => ({ shadow_fleet_tracks: d.tracks ?? [] })), 300_000)); // 5 min
+    }
+    if (activeLayers.correlated_events) {
+      intervals.push(setInterval(() => fetchEndpoint('/api/correlated-events', d => ({ correlated_events: d.events ?? [] })).then(() => setLayerTimestamps(p => ({ ...p, correlated_events: Date.now() }))), 60_000)); // 1 min
     }
     if (activeLayers.ru_air_raids) {
       intervals.push(setInterval(() => fetchEndpoint('/api/ru-air-raids', d => ({ ru_air_raids: d.events })), 60000)); // 1 min
@@ -1768,7 +1778,10 @@ export default function Dashboard() {
             className="absolute bottom-6 z-[205] pointer-events-auto"
             style={{ right: showAxisBriefing ? '19rem' : '3.5rem' }}
           >
-            <ThreatTimeline show={showThreatTimeline} />
+            <ThreatTimeline
+              show={showThreatTimeline}
+              onLocate={(lat, lng) => setFlyToLocation({ lat, lng, ts: Date.now() })}
+            />
           </motion.div>
         )}
       </AnimatePresence>
