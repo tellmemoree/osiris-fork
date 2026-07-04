@@ -180,9 +180,17 @@ Env vars required for full enrichment: SHODAN_API_KEY (in osiris container .env)
 
 /api/drone-threats, /api/missile-threats
   ├─ Telegram UA channels (1.5h window, 15-min cache)
+  ├─ UA_THREAT_CHANNELS: 22 channels (6 original + 15 Neptune monitor set + mon1tor_ua, 2026-07)
+  ├─ kab-threats keeps its own 6-channel local list (not yet migrated)
   ├─ telegram-threats.ts: buildRoute() for temporal waves
   ├─ Alarm cross-ref (air-raid-history.json)
   └─ Route polylines + alarm-confirmed rings
+
+/api/neptun-alerts
+  ├─ neptun.in.ua/api/v1/alerts (Cloudflare-protected → stealthFetch)
+  ├─ Version-gated 2-min module cache + inflight coalescing; never 5xx (stale-on-error)
+  ├─ Returns { updatedAt, activeKeys[] } — lowercase-Cyrillic raion keys, apostrophes normalized to U+0027
+  └─ Client joins keys against static public/raions.geojson (136 raions, `key` prop) on layer neptun_raion_alerts
 ```
 
 ### Live AIS / ADS-B Flow
@@ -360,7 +368,7 @@ LayerPanel.tsx organizes layers into 10 groups:
 ├─ Surveillance (CCTV, News, Live News Feeds)
 ├─ Natural Hazards (Earthquakes, Fires, Weather, Air Quality)
 ├─ Threats & Infrastructure (Nuclear, Global Incidents, GPS Jamming)
-├─ Ukraine War (Frontline, Thermal, Captures, Raids, KAB, Drones, Missiles, Power)
+├─ Ukraine War (Frontline, Thermal, Captures, Raids, KAB, Drones, Missiles, Power, Raion Alerts (Neptune))
 ├─ Russia (RU Air Raids)
 ├─ Network Intel (Internet Outages, Malware)
 └─ Display (Day/Night Cycle)
