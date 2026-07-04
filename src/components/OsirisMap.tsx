@@ -1874,6 +1874,18 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
         critical: 'rgba(255,23,68,0.8)', high: 'rgba(255,107,0,0.8)',
         med: 'rgba(255,193,7,0.8)', low: 'rgba(100,181,246,0.6)',
       };
+      const contribs: Array<{ signal: string; label: string; url?: string; ts: string }> =
+        Array.isArray(score.contributors) ? score.contributors : [];
+      const sourcesHtml = contribs.length > 0
+        ? `<details style="margin-top:8px;"><summary style="cursor:pointer;color:#64B5F6;font-size:10px;list-style:none;-webkit-appearance:none;user-select:none;">Sources (${contribs.length}) &#9658;</summary><div style="margin-top:5px;">${contribs.map((c) => {
+            const sigLabel = c.signal === 'air_raid' ? 'Air Raid' : 'KAB';
+            const ts = new Date(c.ts).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+            const lbl = c.url
+              ? `<a href="${safeUrl(c.url)}" target="_blank" style="color:#64B5F6;text-decoration:none;">${esc(c.label)}</a>`
+              : `<span style="color:#aaa">${esc(c.label)}</span>`;
+            return `<div style="font-size:9px;color:#888;margin-bottom:3px;line-height:1.4;">${esc(sigLabel)} &middot; ${lbl} &middot; ${ts}</div>`;
+          }).join('')}</div></details>`
+        : '';
       popup(e.lngLat, `<div style="${pStyle}border:1px solid ${levelColors[score.level] ?? 'rgba(255,255,255,0.3)'};max-width:280px;">
         <div style="font-weight:700;margin-bottom:4px">${esc(nameEn)}</div>
         <div>Pressure: <b>${Math.round(score.score)}</b> <span style="color:#aaa">(${esc(score.level.toUpperCase())})</span></div>
@@ -1883,6 +1895,7 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
           Frontline ${pct(score.components.frontline)} &middot;
           Outage ${pct(score.components.outage)}
         </div>
+        ${sourcesHtml}
       </div>`);
     });
     map.on('mouseenter', 'pressure-oblast-fill', () => { map.getCanvas().style.cursor = 'pointer'; });

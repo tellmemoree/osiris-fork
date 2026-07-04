@@ -24,6 +24,13 @@ export const dynamic = 'force-dynamic';
 
 const CACHE_TTL_MS = 60_000;
 
+interface ContributorItem {
+  signal: 'air_raid' | 'kab';
+  label: string;
+  url?: string;
+  ts: string;
+}
+
 interface OblastScore {
   name_en: string;
   score: number;
@@ -31,6 +38,7 @@ interface OblastScore {
   lng: number;
   lat: number;
   components: { ballistic: number; kab: number; frontline: number; outage: number };
+  contributors: ContributorItem[];
 }
 
 interface PressureResponse {
@@ -245,12 +253,12 @@ async function computePressure(): Promise<PressureResponse> {
   };
 
   // Pre-process source data
-  // -- Ballistic: set of oblasts with active oblast-level alerts
-  const activeBallistic = new Set<string>();
+  // -- Ballistic: map of oblast name_en → startedAt (first active alert; ts used for contributors)
+  const activeBallistic = new Map<string, string>(); // name_en → startedAt ISO
   if (airData?.alerts && Array.isArray(airData.alerts)) {
     for (const a of airData.alerts) {
-      if (a.level === 'oblast' && typeof a.oblast === 'string') {
-        activeBallistic.add(a.oblast);
+      if (a.level === 'oblast' && typeof a.oblast === 'string' && !activeBallistic.has(a.oblast)) {
+        activeBallistic.set(a.oblast, typeof a.startedAt === 'string' ? a.startedAt : new Date().toISOString());
       }
     }
   }
@@ -292,7 +300,7 @@ async function computePressure(): Promise<PressureResponse> {
   // Score oblasts: static frontline set + any with an active alert or KAB count.
   // This catches nationwide barrage nights when western oblasts (Lviv, Vinnytsia) are struck.
   const dynamicOblasts = new Set(PRESSURE_OBLASTS);
-  for (const name of activeBallistic) if (name in OBLAST_CENTROIDS) dynamicOblasts.add(name);
+  for (const name of activeBallistic.keys()) if (name in OBLAST_CENTROIDS) dynamicOblasts.add(name);
   for (const name of kabCounts.keys()) if (name in OBLAST_CENTROIDS) dynamicOblasts.add(name);
 
   const oblasts: OblastScore[] = Object.entries(OBLAST_CENTROIDS)
@@ -308,6 +316,37 @@ async function computePressure(): Promise<PressureResponse> {
       (ballistic * 0.40 + kab * 0.30 + frontline * 0.20 + outage * 0.10) * 100
     );
 
+    // ── Contributor list for popup "Sources" section ──
+    const contributors: ContributorItem[] = [];
+
+    // Air raid contributor
+    const airTs = activeBallistic.get(name_en);
+    if (airTs !== undefined) {
+      contributors.push({ signal: 'air_raid', label: 'Active oblast alert', ts: airTs });
+    }
+
+    // KAB contributors — one entry per matching threat (capped at 5)
+    if (kabData?.threats && Array.isArray(kabData.threats)) {
+      for (const t of kabData.threats as Array<{
+        oblast: string; text: string; startedAt: string; sources: string[];
+      }>) {
+        if (t.oblast === name_en && contributors.filter(c => c.signal === 'kab').length < 5) {
+          const snippet = typeof t.text === 'string' && t.text.length > 60
+            ? t.text.slice(0, 60) + '…'
+            : String(t.text ?? '');
+          const src = Array.isArray(t.sources) && t.sources[0]
+            ? `https://${t.sources[0]}`
+            : undefined;
+          contributors.push({
+            signal: 'kab',
+            label: snippet,
+            url: src,
+            ts: typeof t.startedAt === 'string' ? t.startedAt : new Date().toISOString(),
+          });
+        }
+      }
+    }
+
     return {
       name_en,
       score,
@@ -315,6 +354,7 @@ async function computePressure(): Promise<PressureResponse> {
       lng,
       lat,
       components: { ballistic, kab, frontline, outage },
+      contributors,
     };
   });
 
