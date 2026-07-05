@@ -753,39 +753,61 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
       // which was the #1 user complaint). Standalone rotated icons only — no
       // connecting lines. Soft glow halo beneath the icons, same recipe as
       // raid-glow/kab-glow (interpolated circle-radius + low opacity + blur).
+      //
+      // Features carry no `color` property (only `ttype`) — color is derived
+      // here via the same ttype->color mapping as THREAT_TYPE_META/createThreatIcon,
+      // so the glow/label tint actually matches each type instead of always
+      // falling back to one color.
+      const THREAT_TTYPE_COLOR_MATCH: any = ['match', ['get', 'ttype'],
+        'fpv', '#FFB300', 'cruise', '#FF5252', 'ballistic', '#E040FB',
+        'kab', '#FF6B00', 'aviation', '#536DFE', 'recon', '#26C6DA',
+        'uav', '#FFB300', '#FFB300',
+      ];
+      // Base icon-image: static per-ttype match, no feature-state. MapLibre/Mapbox
+      // GL forbid feature-state expressions in LAYOUT properties (paint-only) —
+      // using one here silently drops icon-image entirely, which is why the
+      // previous version rendered no icon at all (and therefore nothing to
+      // click, since there was no rendered feature to hit-test). Selection is
+      // instead handled by a separate overlay layer below, filtered via
+      // setFilter — the same pattern this file already uses everywhere else
+      // for click-to-highlight (see raid-oblast-fill/neptun-raion-fill etc.).
+      const THREAT_ICON_MATCH: any = ['match', ['get', 'ttype'],
+        'fpv', 'threat-fpv', 'cruise', 'threat-cruise', 'ballistic', 'threat-ballistic',
+        'kab', 'threat-kab', 'aviation', 'threat-aviation', 'recon', 'threat-recon',
+        'uav', 'threat-fpv', 'threat-fpv',
+      ];
       map.addLayer({ id: 'unified-threat-glow', type: 'circle', source: 'unified-threats', paint: {
         'circle-radius': ['interpolate', ['linear'], ['zoom'], 1, 13, 5, 22, 10, 34],
-        'circle-color': ['coalesce', ['get', 'color'], '#FF6B00'], 'circle-opacity': 0.14, 'circle-blur': 1,
+        'circle-color': THREAT_TTYPE_COLOR_MATCH, 'circle-opacity': 0.14, 'circle-blur': 1,
       }});
       map.addLayer({ id: 'unified-threat-icons', type: 'symbol', source: 'unified-threats', layout: {
-        // Selected feature (feature-state, set on click) swaps in the larger
-        // white-ringed "-selected" icon variant for that one feature only.
-        'icon-image': [
-          'concat',
-          ['match', ['get', 'ttype'],
-            'fpv', 'threat-fpv',
-            'cruise', 'threat-cruise',
-            'ballistic', 'threat-ballistic',
-            'kab', 'threat-kab',
-            'aviation', 'threat-aviation',
-            'recon', 'threat-recon',
-            'uav', 'threat-fpv',
-            'threat-fpv',
-          ],
-          ['case', ['boolean', ['feature-state', 'selected'], false], '-selected', ''],
-        ],
+        'icon-image': THREAT_ICON_MATCH,
         'icon-size': ['interpolate', ['linear'], ['zoom'], 1, 0.6, 5, 0.85, 10, 1.1],
         // null bearing → unrotated icon (still rendered, never hidden).
         'icon-rotate': ['coalesce', ['get', 'bearing'], 0],
         'icon-rotation-alignment': 'map',
         'icon-allow-overlap': true,
       }});
+      // Selected-state overlay — same source, filtered (via setFilter in the
+      // click handler below) down to just the clicked feature's `fid`, drawn
+      // with the larger white-ringed "-selected" icon variant. Starts with a
+      // filter that matches nothing.
+      map.addLayer({ id: 'unified-threat-icons-selected', type: 'symbol', source: 'unified-threats',
+        filter: ['==', ['get', 'fid'], -1],
+        layout: {
+          'icon-image': ['concat', THREAT_ICON_MATCH, '-selected'],
+          'icon-size': ['interpolate', ['linear'], ['zoom'], 1, 0.6, 5, 0.85, 10, 1.1],
+          'icon-rotate': ['coalesce', ['get', 'bearing'], 0],
+          'icon-rotation-alignment': 'map',
+          'icon-allow-overlap': true,
+        },
+      });
       map.addLayer({ id: 'unified-threat-label', type: 'symbol', source: 'unified-threats', minzoom: 4,
         layout: {
           'text-field': ['get', 'title'], 'text-size': 9, 'text-font': ['Open Sans Regular'],
           'text-offset': [0, 1.9], 'text-allow-overlap': false,
         },
-        paint: { 'text-color': ['coalesce', ['get', 'color'], '#FF6B00'], 'text-halo-color': '#000', 'text-halo-width': 1 },
+        paint: { 'text-color': THREAT_TTYPE_COLOR_MATCH, 'text-halo-color': '#000', 'text-halo-width': 1 },
       });
 
       // Alarm-Vector inference layer — dashed lines + arrow markers derived from
@@ -1667,27 +1689,26 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
     });
 
     // ── Unified Threats — fpv / cruise / ballistic / kab / aviation / recon / uav ──
-    // Selection state: clicking a feature applies the "-selected" icon + white ring
-    // (via feature-state, read by the icon-image match expression above) to that
-    // feature only, clearing whichever was previously selected.
-    let selectedThreatId: number | string | null = null;
+    // Selection state: clicking a feature filters the 'unified-threat-icons-selected'
+    // overlay layer down to that one feature's `fid` (see layer setup above for why
+    // this uses setFilter rather than feature-state — feature-state isn't valid in
+    // icon-image, a layout property, and silently no-ops there).
+    let selectedThreatFid: number | null = null;
     const clearThreatSelection = () => {
-      if (selectedThreatId != null) {
-        map.setFeatureState({ source: 'unified-threats', id: selectedThreatId }, { selected: false });
-        selectedThreatId = null;
+      if (selectedThreatFid != null) {
+        map.setFilter('unified-threat-icons-selected', ['==', ['get', 'fid'], -1]);
+        selectedThreatFid = null;
       }
     };
-    map.on('click', 'unified-threat-icons', e => {
+    const onThreatClick = (e: maplibregl.MapLayerMouseEvent) => {
       if (!e.features?.length) return;
       const f = e.features[0];
       const p = f.properties as any;
       const coords = (f.geometry as any).coordinates;
 
-      clearThreatSelection();
-      if (f.id != null) {
-        map.setFeatureState({ source: 'unified-threats', id: f.id }, { selected: true });
-        selectedThreatId = f.id as number | string;
-      }
+      const fid = Number(p.fid);
+      map.setFilter('unified-threat-icons-selected', ['==', ['get', 'fid'], fid]);
+      selectedThreatFid = fid;
 
       const meta = THREAT_TYPE_META[p.ttype as string] ?? THREAT_TYPE_META.uav;
       const color = p.color || meta.color;
@@ -1715,10 +1736,15 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
         ${bandBadge}
         <div style="font-size:8px;color:#5C5A54;margin-top:8px;">${sourcesCount || 1} дж. · ${minutesAgo != null ? `${minutesAgo} хвилин тому` : '—'}</div>
       </div>`);
-    });
-    // Clear selection when the popup closes (click elsewhere / close button).
+    };
+    // Bound on both layers — the selected overlay sits on top of the base icon
+    // once a feature is selected, so re-clicking the (now larger) selected icon
+    // must still hit a delegated handler and reopen its popup.
+    map.on('click', 'unified-threat-icons', onThreatClick);
+    map.on('click', 'unified-threat-icons-selected', onThreatClick);
+    // Clear selection when clicking elsewhere (not on either threat layer).
     map.on('click', e => {
-      const hit = map.queryRenderedFeatures(e.point, { layers: ['unified-threat-icons'] });
+      const hit = map.queryRenderedFeatures(e.point, { layers: ['unified-threat-icons', 'unified-threat-icons-selected'] });
       if (hit.length === 0) clearThreatSelection();
     });
 
@@ -1942,7 +1968,7 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
     });
 
     // ── Generic hover for clickables ──
-    ['conflict-icons','cctv-dots','eq-circles','sat-dots','fires-heat','gdelt-dots','weather-dots','infra-dots','maritime-dots','choke-dots','news-dots','sigint-news-dots','balloon-dots','rad-dots','ship-dots','ship-shadow-dots','sweep-device-dots','scan-targets-dots','sdk-sea','sdk-sea-glow','sdk-sea-atmo','sdk-air','sdk-air-glow','sdk-air-atmo','sdk-intel','sdk-intel-glow','sdk-intel-atmo','raid-dots','outage-dots','unified-threat-icons','ru-raid-dots','malware-dots','ioda-dots','rail-strike-dots'].forEach(layer => {
+    ['conflict-icons','cctv-dots','eq-circles','sat-dots','fires-heat','gdelt-dots','weather-dots','infra-dots','maritime-dots','choke-dots','news-dots','sigint-news-dots','balloon-dots','rad-dots','ship-dots','ship-shadow-dots','sweep-device-dots','scan-targets-dots','sdk-sea','sdk-sea-glow','sdk-sea-atmo','sdk-air','sdk-air-glow','sdk-air-atmo','sdk-intel','sdk-intel-glow','sdk-intel-atmo','raid-dots','outage-dots','unified-threat-icons','unified-threat-icons-selected','ru-raid-dots','malware-dots','ioda-dots','rail-strike-dots'].forEach(layer => {
       map.on('mouseenter', layer, () => { map.getCanvas().style.cursor = 'pointer'; });
       map.on('mouseleave', layer, () => { map.getCanvas().style.cursor = ''; });
     });
@@ -3039,7 +3065,7 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
     setVis(['sweep-connections','sweep-pulse-ring','sweep-device-glow','sweep-device-dots','sweep-device-labels'], true);
     setVis(['raid-oblast-fill','raid-oblast-outline','raid-district-fill','raid-district-outline','raid-glow','raid-dots','raid-label'], activeLayers.air_raids);
     setVis(['outage-oblast-fill','outage-oblast-outline','outage-glow','outage-dots','outage-label'], activeLayers.power_outages);
-    setVis(['unified-threat-glow','unified-threat-icons','unified-threat-label'], activeLayers.unified_threats);
+    setVis(['unified-threat-glow','unified-threat-icons','unified-threat-icons-selected','unified-threat-label'], activeLayers.unified_threats);
     setVis(['alarm-vector-line','alarm-vector-arrow','alarm-vector-label'], activeLayers.unified_threats || activeLayers.alarm_vectors);
     setVis(['neptun-raion-fill','neptun-raion-outline'], activeLayers.neptun_raion_alerts);
     setVis(['ru-raid-glow','ru-raid-dots','ru-raid-label'], activeLayers.ru_air_raids);

@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { stealthFetch } from '@/lib/stealthFetch';
 import path from 'path';
 import os from 'os';
+import { findBestPlace } from '@/lib/conflict-geo';
 import {
   loadTrackEntries, mergeAndSaveTracks,
   type TrackEntry,
@@ -108,6 +109,7 @@ interface KabThreat {
   alertType: 'KAB';
   lat: number;
   lng: number;
+  place?: string; // city/village named in the latest mention, if resolvable — otherwise lat/lng is the oblast centroid
   count: number;
   startedAt: string; // ISO of the most recent mention
   text: string;      // snippet of the most recent mention
@@ -193,7 +195,7 @@ async function fetchChannel(channel: string): Promise<TgMessage[]> {
  */
 function buildThreatsFromEntries(entries: TrackEntry[]): KabThreat[] {
   type Agg = {
-    lat: number; lng: number;
+    lat: number; lng: number; place?: string;
     count: number; latestTs: number; latestText: string; sources: Set<string>;
   };
   const agg = new Map<string, Agg>();
@@ -202,7 +204,7 @@ function buildThreatsFromEntries(entries: TrackEntry[]): KabThreat[] {
     const cur = agg.get(e.oblast);
     if (!cur) {
       agg.set(e.oblast, {
-        lat: e.lat, lng: e.lng,
+        lat: e.lat, lng: e.lng, place: e.place,
         count: 1,
         latestTs: e.ts,
         latestText: e.text,
@@ -214,6 +216,11 @@ function buildThreatsFromEntries(entries: TrackEntry[]): KabThreat[] {
       if (e.ts > cur.latestTs) {
         cur.latestTs = e.ts;
         cur.latestText = e.text;
+        // Pin/place track the latest mention, same as text/ts above — an older
+        // entry's resolved place shouldn't outlive the mention it came from.
+        cur.lat = e.lat;
+        cur.lng = e.lng;
+        cur.place = e.place;
       }
     }
   }
@@ -226,6 +233,7 @@ function buildThreatsFromEntries(entries: TrackEntry[]): KabThreat[] {
       alertType: 'KAB' as const,
       lat: a.lat,
       lng: a.lng,
+      place: a.place,
       count: a.count,
       startedAt: new Date(a.latestTs).toISOString(),
       text: a.latestText.length > 220 ? a.latestText.slice(0, 220) + '…' : a.latestText,
@@ -277,14 +285,20 @@ async function buildThreats(): Promise<KabResponse> {
   // One entry per (channel, oblast) pair, timestamped at the latest mention.
   const newEntries: TrackEntry[] = [];
   for (const [, a] of agg) {
+    // A city/village named in the text is more precise than the oblast
+    // centroid — same resolution telegram-threats.ts uses for drone routes.
+    // KAB previously had no city-level geocoding at all (oblast-centroid
+    // only), which is why every KAB marker piled up at one point per oblast.
+    const place = findBestPlace(a.latestText);
     for (const channel of a.sources) {
       newEntries.push({
         weaponType:     'KAB',
         ts:             a.latestTs,
         channel,
         oblast:         a.ref.oblast,
-        lat:            a.ref.coords[1],
-        lng:            a.ref.coords[0],
+        lat:            place ? place.coords[0] : a.ref.coords[1],
+        lng:            place ? place.coords[1] : a.ref.coords[0],
+        place:          place?.name,
         text:           a.latestText.length > 220 ? a.latestText.slice(0, 220) + '…' : a.latestText,
         alarmConfirmed: false,
       });

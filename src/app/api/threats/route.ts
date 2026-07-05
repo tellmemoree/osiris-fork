@@ -39,6 +39,7 @@ export type UnifiedThreatType =
   | 'fpv' | 'cruise' | 'ballistic' | 'kab' | 'aviation' | 'recon' | 'uav';
 
 export interface UnifiedThreatProperties {
+  fid?:        number; // stable per-response index, stamped post-hoc — map click-to-select keys off this (GeoJSON sources here have no generateId)
   ttype:       UnifiedThreatType;
   title:       string;
   place?:      string;
@@ -88,6 +89,7 @@ interface KabThreat {
   regionName?: string;
   lat?: number;
   lng?: number;
+  place?: string;
   count?: number;
   startedAt?: string;
   sources?: string[];
@@ -215,11 +217,12 @@ async function computeUnifiedThreats(): Promise<UnifiedThreatsResponse> {
         properties: {
           ttype: 'kab',
           title: TITLES.kab,
+          place: typeof t.place === 'string' ? t.place : undefined,
           oblast,
           confidence,
           band: confidenceBand(confidence),
           bearing: null, // KAB threats carry no computed bearing signal
-          approximate: true, // KAB threats are oblast-centroid only, never a precise point
+          approximate: !t.place, // oblast-centroid fallback only when no city resolved
           sources: confidence,
           ts: typeof t.startedAt === 'string' ? t.startedAt : new Date().toISOString(),
         },
@@ -325,8 +328,30 @@ async function computeUnifiedThreats(): Promise<UnifiedThreatsResponse> {
     }
   }
 
+  // Dedupe: the underlying per-type routes each accumulate their own rolling
+  // window (24h drone / 12h missile / 6h KAB) so the *same* place gets a fresh
+  // feature every time it's re-mentioned, all pinned to the identical
+  // coordinate — visually these stack into a single marker anyway, but they
+  // inflate the feature count and hide how few distinct threats are actually
+  // current. Keep only the most recent feature per (ttype, place-or-oblast)
+  // so the map reflects current state; full history still lives in each
+  // route's own *-tracks.json for the timeline and other consumers.
+  const latestByKey = new Map<string, UnifiedThreatFeature>();
+  for (const f of features) {
+    const key = `${f.properties.ttype}|${f.properties.place ?? f.properties.oblast}`;
+    const existing = latestByKey.get(key);
+    if (!existing || new Date(f.properties.ts).getTime() > new Date(existing.properties.ts).getTime()) {
+      latestByKey.set(key, f);
+    }
+  }
+  const deduped = Array.from(latestByKey.values());
+
+  // Stable per-response index for map click-to-select (the unified-threats
+  // GeoJSON source has no generateId, so features carry no usable id otherwise).
+  deduped.forEach((f, i) => { f.properties.fid = i; });
+
   return {
-    features: { type: 'FeatureCollection', features },
+    features: { type: 'FeatureCollection', features: deduped },
     // Passed through unchanged — existing page.tsx alarm_vectors layer depends
     // on these fields continuing to exist in this exact shape.
     alarm_vectors: Array.isArray(droneData?.alarm_vectors) ? droneData!.alarm_vectors! : [],
