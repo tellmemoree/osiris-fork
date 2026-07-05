@@ -12,6 +12,7 @@
  */
 
 import { stealthFetch } from '@/lib/stealthFetch';
+import { findBestPlace, findAllNamedPlaces } from '@/lib/conflict-geo';
 
 // ── channels ────────────────────────────────────────────────────────────────
 
@@ -58,11 +59,14 @@ export interface RouteWaypoint {
   lat: number;
   lng: number;
   oblast: string;
+  place?: string; // city/village named in the text, if more specific than the oblast centroid
   ts: string;     // ISO
   text: string;
   channel: string;
-  alarmConfirmed?: boolean; // true when air-raid history records this oblast alarmed near ts
-  confidence?: number;      // number of distinct channels that reported this waypoint's wave
+  alarmConfirmed?: boolean;  // true when air-raid history records this oblast alarmed near ts
+  confidence?: number;       // number of distinct channels that reported this waypoint's wave
+  subtype?: 'FPV' | 'RECON' | 'UAV'; // DRONE-only sub-classification; undefined for other weapon types
+  bearing?: number | null;           // DRONE-only great-circle bearing (deg, 0-360) toward named target place; null when unresolvable
 }
 
 export interface RouteWave {
@@ -88,7 +92,9 @@ export const OBLAST_REFS: OblastRef[] = [
   { oblast: 'Kyiv oblast',           coords: [30.523, 50.450], tokens: ['київщ', 'київськ', 'kyivsk', 'бровар', 'бориспіл', 'vasylkiv', 'васильків'] },
   { oblast: 'Kyiv City',             coords: [30.523, 50.450], tokens: ['kyiv', 'київ'] },
   { oblast: 'Zhytomyr oblast',       coords: [28.658, 50.255], tokens: ['житомирщ', 'житомир', 'zhytomyr', 'бердичів', 'коростень'] },
-  { oblast: 'Rivne oblast',          coords: [26.251, 50.620], tokens: ['рівненщ', 'рівн', 'rivne', 'рівного', 'рівному'] },
+  // Bare 'рівн' dropped — collides with 'рівня'/'рівний' (level/equal); the
+  // remaining tokens are long enough to stay specific to the place name.
+  { oblast: 'Rivne oblast',          coords: [26.251, 50.620], tokens: ['рівненщ', 'рівненськ', 'rivne', 'рівного', 'рівному', 'м. рівне'] },
   { oblast: 'Vinnytsia oblast',      coords: [28.468, 49.233], tokens: ['вінниц', 'вінниці', 'vinnytsia', 'вінниця', 'жмеринк'] },
   { oblast: 'Khmelnytskyi oblast',   coords: [26.987, 49.423], tokens: ['хмельниц', 'khmelnytsk', 'хмельницьк', "кам'янець"] },
   { oblast: 'Kirovohrad oblast',     coords: [32.262, 48.508], tokens: ['кіровоград', 'kirovohrad', 'кропивниц', 'kropyvnytsk'] },
@@ -198,6 +204,72 @@ export const MIG31_PATTERNS: RegExp[] = [
 
 export function isMig31Mention(text: string): boolean {
   return MIG31_PATTERNS.some((re) => re.test(text));
+}
+
+// ── drone sub-classification (FPV / recon / generic UAV) ────────────────────
+
+const FPV_PATTERN   = /fpv|фпв/i;
+const RECON_PATTERN = /розвід(увальн|к)/i;
+
+/**
+ * Sub-classifies a message already matched as DRONE by classifyWeapons().
+ * FPV/loitering-munition mentions take priority over recon mentions
+ * (a message can contain both terms; FPV is the more specific/actionable signal).
+ * Falls back to generic 'UAV' when neither pattern matches.
+ */
+export function classifyDroneSubtype(text: string): 'FPV' | 'RECON' | 'UAV' {
+  if (FPV_PATTERN.test(text)) return 'FPV';
+  if (RECON_PATTERN.test(text)) return 'RECON';
+  return 'UAV';
+}
+
+// ── bearing computation ──────────────────────────────────────────────────────
+
+/**
+ * Computes the great-circle initial bearing (degrees, 0-360) from
+ * (spotLat, spotLng) toward a named place mentioned in `text` that is
+ * distinct from the spot's own coordinates — i.e. the direction the
+ * reported threat is heading, per a place named in the message body
+ * (e.g. "...курсом на Богодухів...").
+ *
+ * Returns null when no distinct target place can be resolved from the text —
+ * callers must treat null as "no rotation available", not an error.
+ */
+export function computeBearing(text: string, spotLat: number, spotLng: number): number | null {
+  const places = findAllNamedPlaces(text);
+  if (places.length === 0) return null;
+
+  // Skip any place that resolves to (approximately) the spot's own coordinates —
+  // that's the origin, not a target.
+  const target = places.find(({ coords: [lat, lng] }) => {
+    return Math.abs(lat - spotLat) > 1e-4 || Math.abs(lng - spotLng) > 1e-4;
+  });
+  if (!target) return null;
+
+  const [tLat, tLng] = target.coords;
+  const toRad = (deg: number) => (deg * Math.PI) / 180;
+  const lat1 = toRad(spotLat);
+  const lat2 = toRad(tLat);
+  const dLng = toRad(tLng - spotLng);
+
+  const y = Math.sin(dLng) * Math.cos(lat2);
+  const x = Math.cos(lat1) * Math.sin(lat2) - Math.sin(lat1) * Math.cos(lat2) * Math.cos(dLng);
+  const bearingRad = Math.atan2(y, x);
+  const bearingDeg = (bearingRad * 180) / Math.PI;
+  return (bearingDeg + 360) % 360;
+}
+
+// ── confidence banding ────────────────────────────────────────────────────────
+
+/**
+ * Buckets a confidence count (distinct reporting channels) into a display band.
+ * PINNED ACCEPTANCE CRITERIA — exact thresholds, not a guess: n<3 low,
+ * 3<=n<=4 medium, n>=5 high. Do not "round" or otherwise adjust these.
+ */
+export function confidenceBand(n: number): 'low' | 'medium' | 'high' {
+  if (n < 3) return 'low';
+  if (n <= 4) return 'medium';
+  return 'high';
 }
 
 // ── corpus cache constants ───────────────────────────────────────────────────
@@ -504,7 +576,7 @@ const ANALYSIS_PATTERNS: RegExp[] = [
   /середн\p{L}+\s+рівен/iu,            // "medium level"
 ];
 
-function isAnalysis(text: string): boolean {
+export function isAnalysis(text: string): boolean {
   return ANALYSIS_PATTERNS.some(re => re.test(text));
 }
 
@@ -593,6 +665,12 @@ export function buildRoute(messages: TgMessage[], weaponType: WeaponType): Route
       const confidence = currentChannels.size;
       for (const wp of current) {
         wp.confidence = confidence;
+        // subtype/bearing are only meaningful for DRONE waves — other weapon
+        // types leave these undefined.
+        if (weaponType === 'DRONE') {
+          wp.subtype = classifyDroneSubtype(wp.text);
+          wp.bearing = computeBearing(wp.text, wp.lat, wp.lng);
+        }
       }
       waves.push({ waveIndex: waves.length, startedAt: current[0].ts, waypoints: current });
       current = [];
@@ -614,10 +692,16 @@ export function buildRoute(messages: TgMessage[], weaponType: WeaponType): Route
       continue;
     }
 
+    // A city/village named in the text is more precise than the oblast
+    // centroid — use it for the pin, but keep `oblast` (above) as the wave's
+    // dedup identity so consecutive same-oblast messages still collapse into
+    // one waypoint instead of the route jittering between every named town.
+    const place = findBestPlace(msg.text);
     current.push({
-      lat:     ref.coords[1],
-      lng:     ref.coords[0],
+      lat:     place ? place.coords[0] : ref.coords[1],
+      lng:     place ? place.coords[1] : ref.coords[0],
       oblast:  ref.oblast,
+      place:   place?.name,
       ts:      new Date(msg.ts).toISOString(),
       text:    msg.text.length > 120 ? msg.text.slice(0, 120) + '…' : msg.text,
       channel: msg.channel,

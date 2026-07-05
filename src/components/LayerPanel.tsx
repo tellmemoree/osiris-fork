@@ -5,7 +5,8 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
   Plane, Satellite, Activity, Sun, AlertTriangle, Camera, Flame, Target,
   CloudLightning, Radiation, Tv, Anchor, Ship, Newspaper,
-  Network, Share2, Radio, Siren, Bomb, Zap, Train, GitMerge
+  Network, Share2, Radio, Siren, Zap, Train, GitMerge, Radar,
+  Waypoints, Rocket, ArrowDownRight, Bomb, Eye
 } from 'lucide-react';
 
 interface LayerPanelProps {
@@ -110,14 +111,11 @@ const getLayerGroups = (theme: 'core' | 'ghost') => {
       { key: 'thermal_aoi', label: 'Thermal Strike AOIs', icon: Flame, color: '#FF6B00', dataKey: 'thermal_aoi' },
       { key: 'captures', label: 'Territorial Captures', icon: Target, color: '#FF3D3D', dataKey: 'captures' },
       { key: 'air_raids', label: 'Air Raid Alerts', icon: Siren, color: '#FF1744', dataKey: 'air_raids' },
-      { key: 'kab_threats', label: 'KAB / Glide-Bomb', icon: Bomb, color: '#FF6B00', dataKey: 'kab_threats' },
-      { key: 'drone_threats', label: 'Drone / UAV Swarms', icon: Plane, color: '#CE93D8', dataKey: 'drone_threats' },
+      { key: 'unified_threats', label: 'Unified Threats', icon: Radar, color: '#FF6B00', dataKey: 'threats' },
       { key: 'alarm_vectors', label: 'Wave Vectors (inferred)', icon: Activity, color: '#FF9800', dataKey: '' },
       { key: 'neptun_raion_alerts', label: 'Raion Alerts (Neptune)', icon: Siren, color: '#FF6B6B', dataKey: '' },
-      { key: 'missile_threats', label: 'Missile Threats', icon: Zap, color: '#FF4444', dataKey: 'missile_routes' },
       { key: 'power_outages', label: 'Power Outages', icon: Zap, color: '#FFD500', dataKey: 'power_outages' },
       { key: 'oblast_pressure', label: 'Oblast Pressure', icon: Activity, color: '#FF7043', dataKey: 'oblast_pressure' },
-      { key: 'mig31k', label: 'MiG-31K / Kinzhal Carrier', icon: Plane, color: '#FFAB00', dataKey: '' },
       { key: 'correlated_events', label: 'Threat Timeline', icon: GitMerge, color: '#FF6D00', dataKey: '' },
     ],
   },
@@ -148,6 +146,19 @@ const getLayerGroups = (theme: 'core' | 'ghost') => {
   },
   ];
 };
+
+// Unified Threats legend — one badge per `ttype`, distinct icon + color so users
+// can tell types apart at a glance (not just by color). Mirrors the icon set
+// registered on the map (OsirisMap.tsx `unified-threat-icons` symbol layer) and
+// the popup header badge, so the legend, map icon, and popup all agree.
+const THREAT_TYPE_LEGEND: { key: string; label: string; icon: typeof Waypoints; color: string }[] = [
+  { key: 'fpv',       label: 'FPV',      icon: Waypoints,      color: '#FFB300' },
+  { key: 'cruise',    label: 'Cruise',   icon: Rocket,         color: '#FF5252' },
+  { key: 'ballistic', label: 'Ballistic',icon: ArrowDownRight, color: '#E040FB' },
+  { key: 'kab',       label: 'KAB',      icon: Bomb,           color: '#FF6B00' },
+  { key: 'aviation',  label: 'Aviation', icon: Plane,          color: '#536DFE' },
+  { key: 'recon',     label: 'Recon',    icon: Eye,            color: '#26C6DA' },
+];
 
 // SVG component for Shield which was missing in the imports above
 function Shield(props: any) {
@@ -200,10 +211,6 @@ function LayerPanel({ data, activeLayers, setActiveLayers, isMobile, theme = 'co
   const countFor = (layer: { key: string; dataKey: string; catKey?: string }): number | null => {
     if (layer.catKey) {
       const n = data.category_counts?.[layer.catKey] ?? 0;
-      return n > 0 ? n : null;
-    }
-    if (layer.key === 'mig31k') {
-      const n = data.mig31k?.detections?.length ?? 0;
       return n > 0 ? n : null;
     }
     if (layer.key === 'shadow_fleet') {
@@ -446,30 +453,23 @@ function LayerPanel({ data, activeLayers, setActiveLayers, isMobile, theme = 'co
                                 )}
                               </>
                             )}
-                            {layer.key === 'missile_threats' && isLayerActive && (
-                              <>
-                                {([
-                                  { key: 'missile_cruise',    label: 'Cruise (Kalibr/Kh-101)', color: '#FF4444' },
-                                  { key: 'missile_ballistic', label: 'Ballistic (Iskander)',     color: '#FF8C00' },
-                                  { key: 'missile_kinzhal',   label: 'Kinzhal',                 color: '#FFD700' },
-                                  { key: 'missile_kh22',      label: 'Kh-22/32',                color: '#FF69B4' },
-                                  { key: 'missile_s300',      label: 'S-300 (ground strike)',   color: '#9C27B0' },
-                                ] as const).map(sub => (
-                                  <button
-                                    key={sub.key}
-                                    onClick={(e) => { e.stopPropagation(); toggle(sub.key); }}
-                                    className="w-full flex items-center gap-2 pl-6 pr-2 py-1 rounded bg-transparent hover:bg-white/5 transition-colors"
-                                  >
-                                    <div
-                                      className={`w-1.5 h-1.5 rounded-sm border flex-shrink-0 transition-all ${activeLayers[sub.key] ? 'bg-current border-current' : 'bg-transparent border-white/25'}`}
-                                      style={{ color: sub.color }}
-                                    />
-                                    <span className={`text-[10px] font-mono tracking-wider flex-1 text-left ${activeLayers[sub.key] ? 'text-white/80' : 'text-white/35'}`}>
-                                      {sub.label}
-                                    </span>
-                                  </button>
-                                ))}
-                              </>
+                            {layer.key === 'unified_threats' && isLayerActive && (
+                              <div className="pl-6 pr-2 py-1.5 grid grid-cols-3 gap-1.5">
+                                {THREAT_TYPE_LEGEND.map(t => {
+                                  const TIcon = t.icon;
+                                  return (
+                                    <div key={t.key} className="flex items-center gap-1" title={t.label}>
+                                      <span
+                                        className="flex items-center justify-center w-4 h-4 rounded-sm flex-shrink-0"
+                                        style={{ background: `${t.color}25`, border: `1px solid ${t.color}80` }}
+                                      >
+                                        <TIcon className="w-2.5 h-2.5" style={{ color: t.color }} />
+                                      </span>
+                                      <span className="text-[8px] font-mono tracking-tight text-white/60 truncate">{t.label}</span>
+                                    </div>
+                                  );
+                                })}
+                              </div>
                             )}
                           </div>
                         );

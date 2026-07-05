@@ -24,7 +24,7 @@ type AppData = Record<string, unknown>;
 
 interface Source {
   dataKey: string; // key in `data`
-  kind: string;
+  kind: string | ((r: Row) => string); // per-record kind for heterogeneous sources (e.g. unified threats)
   layerKey: string;
   name: (r: Row) => string | undefined;
   sub?: (r: Row) => string | undefined;
@@ -34,6 +34,11 @@ const str = (v: unknown): string | undefined =>
   v === undefined || v === null || v === '' ? undefined : String(v);
 
 const join = (...parts: (string | undefined)[]) => parts.filter(Boolean).join(' · ');
+
+const THREAT_KIND_LABELS: Record<string, string> = {
+  fpv: 'FPV', cruise: 'Cruise', ballistic: 'Ballistic', kab: 'KAB',
+  aviation: 'Aviation', recon: 'Recon', uav: 'UAV',
+};
 
 // One descriptor per entity array in `data`.
 const SOURCES: Source[] = [
@@ -51,7 +56,9 @@ const SOURCES: Source[] = [
   { dataKey: 'radiation', kind: 'Radiation', layerKey: 'radiation', name: (r) => str(r.name) || str(r.city), sub: (r) => join(str(r.country), 'radiation') },
   { dataKey: 'weather_events', kind: 'Weather', layerKey: 'weather', name: (r) => str(r.title) || str(r.name), sub: (r) => str(r.type) || 'weather' },
   { dataKey: 'maritime_ports', kind: 'Port', layerKey: 'maritime', name: (r) => str(r.name), sub: (r) => join(str(r.country), 'port') },
-  { dataKey: 'kab_threats', kind: 'KAB', layerKey: 'kab_threats', name: (r) => str(r.regionName) || str(r.oblast), sub: () => 'glide-bomb threat' },
+  { dataKey: 'threats', kind: (r) => THREAT_KIND_LABELS[str((r.properties as Row)?.ttype) ?? ''] ?? 'Threat', layerKey: 'unified_threats',
+    name: (r) => str((r.properties as Row)?.place) || str((r.properties as Row)?.oblast),
+    sub: (r) => str((r.properties as Row)?.title) || 'threat' },
   { dataKey: 'power_outages', kind: 'Outage', layerKey: 'power_outages', name: (r) => str(r.regionName), sub: (r) => join(str(r.type), 'outage') },
 ];
 
@@ -68,17 +75,21 @@ export function buildEntityIndex(data: AppData): SearchEntity[] {
     if (!Array.isArray(arr)) continue;
     for (let i = 0; i < arr.length; i++) {
       const r = arr[i] as Row;
-      const lat = num(r.lat);
-      const lng = num(r.lng);
+      // GeoJSON Feature rows (e.g. unified threats) carry coords in
+      // geometry.coordinates ([lng,lat]) rather than flat r.lat/r.lng.
+      const geomCoords = (r.geometry as Row)?.coordinates as [number, number] | undefined;
+      const lat = num(r.lat) ?? num(geomCoords?.[1]);
+      const lng = num(r.lng) ?? num(geomCoords?.[0]);
       const name = src.name(r);
       if (!name || lat === undefined || lng === undefined) continue;
       if (lat === 0 && lng === 0) continue; // null island = bad fix
       if (Math.abs(lat) > 90 || Math.abs(lng) > 180) continue;
+      const kind = typeof src.kind === 'function' ? src.kind(r) : src.kind;
       out.push({
         id: `${src.dataKey}-${str(r.id) || str(r.mmsi) || str(r.icao24) || str(r.noradId) || i}`,
         name,
-        sublabel: src.sub?.(r) || src.kind,
-        kind: src.kind,
+        sublabel: src.sub?.(r) || kind,
+        kind,
         layerKey: src.layerKey,
         lat,
         lng,

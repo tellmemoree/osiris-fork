@@ -4,7 +4,7 @@ import { Play, Pause } from 'lucide-react';
 
 export interface TimelineEvent {
   t: number;   // Unix ms
-  type: 'news' | 'kab' | 'gdelt' | 'thermal' | 'capture';
+  type: 'news' | 'kab' | 'gdelt' | 'thermal' | 'capture' | 'fpv' | 'cruise' | 'ballistic' | 'aviation' | 'recon' | 'uav';
 }
 
 interface Props {
@@ -56,17 +56,25 @@ export default function TimelineControl({ replayTime, timelineRangeH, events, on
   const BUCKETS = Math.min(timelineRangeH, 48);
   const bucketMs = rangeMs / BUCKETS;
   const byType = {
-    news:    new Array(BUCKETS).fill(0) as number[],
-    kab:     new Array(BUCKETS).fill(0) as number[],
-    gdelt:   new Array(BUCKETS).fill(0) as number[],
-    thermal: new Array(BUCKETS).fill(0) as number[],
-    capture: new Array(BUCKETS).fill(0) as number[],
+    news:      new Array(BUCKETS).fill(0) as number[],
+    kab:       new Array(BUCKETS).fill(0) as number[],
+    gdelt:     new Array(BUCKETS).fill(0) as number[],
+    thermal:   new Array(BUCKETS).fill(0) as number[],
+    capture:   new Array(BUCKETS).fill(0) as number[],
+    fpv:       new Array(BUCKETS).fill(0) as number[],
+    cruise:    new Array(BUCKETS).fill(0) as number[],
+    ballistic: new Array(BUCKETS).fill(0) as number[],
+    aviation:  new Array(BUCKETS).fill(0) as number[],
+    recon:     new Array(BUCKETS).fill(0) as number[],
+    uav:       new Array(BUCKETS).fill(0) as number[],
   };
   for (const ev of events) {
     const idx = Math.floor((ev.t - rangeStart) / bucketMs);
     if (idx >= 0 && idx < BUCKETS) byType[ev.type][idx]++;
   }
-  const totals = Array.from({ length: BUCKETS }, (_, i) => byType.news[i] + byType.kab[i] + byType.gdelt[i] + byType.thermal[i] + byType.capture[i]);
+  const totals = Array.from({ length: BUCKETS }, (_, i) =>
+    byType.news[i] + byType.kab[i] + byType.gdelt[i] + byType.thermal[i] + byType.capture[i] +
+    byType.fpv[i] + byType.cruise[i] + byType.ballistic[i] + byType.aviation[i] + byType.recon[i] + byType.uav[i]);
   const maxBucket = Math.max(...totals, 1);
 
   // ── Playback interval ──────────────────────────────────────────────────────

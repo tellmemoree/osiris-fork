@@ -9,16 +9,14 @@ interface Props {
 const LAYER_LABELS: Record<string, string> = {
   air_raids:       'AIR RAIDS',
   flights:         'FLIGHTS',
-  kab_threats:     'KAB',
-  drone_threats:   'DRONES',
-  missile_threats: 'MISSILES',
+  unified_threats: 'THREATS',
   weapon_threats:  'WPNS',
   captures:        'CAPTURES',
   frontlines:      'FRONTLINE',
 };
 
 // layers where >5 min is stale; everything else uses 15 min
-const FAST_LAYERS = new Set(['air_raids', 'kab_threats', 'drone_threats', 'missile_threats', 'weapon_threats']);
+const FAST_LAYERS = new Set(['air_raids', 'unified_threats', 'weapon_threats']);
 
 export default function LayerFreshness({ activeLayers, layerTimestamps }: Props) {
   const [now, setNow] = useState(Date.now());

@@ -33,10 +33,13 @@ export interface TrackEntry {
   ts:             number;  // epoch ms — sort key and dedup anchor
   channel:        string;
   oblast:         string;
+  place?:         string;  // city/village named in the text, if more specific than the oblast centroid
   lat:            number;
   lng:            number;
   text:           string;
   alarmConfirmed: boolean;
+  subtype?:       'FPV' | 'RECON' | 'UAV'; // DRONE-only sub-classification
+  bearing?:       number | null;            // DRONE-only great-circle bearing toward target place
   fingerprint?:   string;  // optional — old on-disk entries lack it
 }
 
@@ -119,12 +122,29 @@ export async function mergeAndSaveTracks(
   const cutoff  = Date.now() - ttlMs;
   const existing = (await loadTrackEntries(file)).filter(e => e.ts > cutoff);
 
-  const seen = new Set(existing.map(e => dedupKey(e)));
+  const byKey = new Map(existing.map(e => [dedupKey(e), e]));
   for (const entry of incoming) {
     const key = dedupKey(entry);
-    if (!seen.has(key)) {
+    const stored = byKey.get(key);
+    if (!stored) {
       existing.push(entry);
-      seen.add(key);
+      byKey.set(key, entry);
+    } else if (entry.place && !stored.place) {
+      // Backfill fields a schema/geocoding change added after this entry was first
+      // persisted — dedup keeps the first-seen copy forever, so without this an
+      // entry scraped before a fix (e.g. city-level place resolution) ships would
+      // never pick up the richer data even when the same message is rescraped.
+      stored.place = entry.place;
+      stored.subtype = entry.subtype;
+      stored.bearing = entry.bearing;
+    } else if (stored.subtype === undefined && entry.subtype !== undefined) {
+      // Same bug class as place/neptunConfirmed above (see 0209f32, 5228265):
+      // a rescraped duplicate of an entry stored before subtype/bearing existed
+      // must not silently keep the field missing forever. Backfill independently
+      // of the `place` branch above since subtype can be new even when place
+      // was already present on the stored entry.
+      stored.subtype = entry.subtype;
+      stored.bearing = entry.bearing;
     }
   }
 
@@ -192,10 +212,13 @@ export function buildWavesFromEntries(entries: TrackEntry[]): RouteWave[] {
       lat:            entry.lat,
       lng:            entry.lng,
       oblast:         entry.oblast,
+      place:          entry.place,
       ts:             new Date(entry.ts).toISOString(),
       text:           entry.text,
       channel:        entry.channel,
       alarmConfirmed: entry.alarmConfirmed,
+      subtype:        entry.subtype,
+      bearing:        entry.bearing,
       confidence:     undefined, // stamped by flush() after full wave is known
     });
     lastTs = entry.ts;
@@ -220,10 +243,13 @@ export function wavesToTrackEntries(
         ts,
         channel:        wp.channel,
         oblast:         wp.oblast,
+        place:          wp.place,
         lat:            wp.lat,
         lng:            wp.lng,
         text:           wp.text,
         alarmConfirmed: !!wp.alarmConfirmed,
+        subtype:        wp.subtype,
+        bearing:        wp.bearing,
         fingerprint:    msgFingerprint(wp.text, ts),
       };
     }),
