@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { stealthFetch } from '@/lib/stealthFetch';
 import path from 'path';
 import os from 'os';
-import { findBestPlace } from '@/lib/conflict-geo';
+import { findBestPlace, matchOblasts, type OblastRef } from '@/lib/conflict-geo';
 import {
   loadTrackEntries, mergeAndSaveTracks,
   type TrackEntry,
@@ -49,46 +49,6 @@ const KAB_PATTERNS: RegExp[] = [
   /планир\p{L}*\s+бомб/iu,                      // RU "планирующая бомба"
   /glide[-\s]*bomb|guided\s+(?:aerial\s+)?bomb/i,
 ];
-
-// Oblast attribution. coords are [lng, lat] (GeoJSON order), matching the existing
-// air-raid layer. Tokens are lowercase stems covering UK declensions + key cities,
-// so "Харківщину" / "Куп'янськ" / "Kharkiv" all resolve to the same oblast.
-interface OblastRef {
-  oblast: string;
-  coords: [number, number];
-  tokens: string[];
-}
-const OBLAST_REFS: OblastRef[] = [
-  { oblast: 'Kharkiv oblast', coords: [36.230, 49.990], tokens: ['харків', 'харківщ', 'kharkiv', 'чугуїв', "куп'янськ", 'kupiansk', 'вовчанськ', 'vovchansk', 'ізюм', 'izium'] },
-  { oblast: 'Sumy oblast', coords: [34.800, 50.910], tokens: ['сумщ', 'сумськ', 'сумської', 'м. суми', 'sumy', 'шостк', 'конотоп'] },
-  { oblast: 'Zaporizhzhia oblast', coords: [35.139, 47.838], tokens: ['запоріж', 'запорізьк', 'zaporizh', 'оріхів', 'оріхов', 'гуляйполе', 'huliaipole', 'токмак', 'tokmak'] },
-  { oblast: 'Kherson oblast', coords: [32.601, 46.635], tokens: ['херсон', 'херсонщ', 'kherson', 'берислав'] },
-  { oblast: 'Donetsk oblast', coords: [37.800, 48.000], tokens: ['донеччин', 'донецьк', 'donetsk', 'краматорськ', 'kramatorsk', "слов'янськ", 'покровськ', 'pokrovsk', 'костянтинівк', 'часів яр', 'торецьк', 'toretsk', 'авдіїв'] },
-  { oblast: 'Dnipropetrovsk oblast', coords: [35.046, 48.465], tokens: ['дніпропетровщ', 'дніпро', 'нікополь', 'nikopol', 'кривий ріг', 'kryvyi rih', 'павлоград', 'марганець'] },
-  { oblast: 'Chernihiv oblast', coords: [31.285, 51.498], tokens: ['чернігівщ', 'чернігів', 'chernihiv', 'новгород-сіверськ', 'семенівк'] },
-  { oblast: 'Mykolaiv oblast', coords: [31.994, 46.975], tokens: ['миколаївщ', 'миколаїв', 'mykolaiv', 'очаків', 'снігурівк'] },
-  { oblast: 'Poltava oblast', coords: [34.551, 49.588], tokens: ['полтавщ', 'полтав', 'poltava', 'кременчук', 'kremenchuk', 'лубни'] },
-  { oblast: 'Luhansk oblast', coords: [39.300, 48.566], tokens: ['луганщ', 'луганськ', 'luhansk', 'luhans', 'рубіжн', 'сєвєродонецьк', 'лисичанськ'] },
-  { oblast: 'Odesa oblast', coords: [30.723, 46.482], tokens: ['одещ', 'одеськ', 'odesa', 'odessa', 'ізмаїл', 'чорноморськ', 'южне'] },
-  { oblast: 'Kyiv oblast', coords: [30.523, 50.450], tokens: ['київщ', 'київськ', 'kyivsk', 'бровар', 'бориспіл', 'vasylkiv', 'васильків'] },
-  { oblast: 'Kyiv City', coords: [30.523, 50.450], tokens: ['kyiv', 'київ'] },
-  { oblast: 'Zhytomyr oblast', coords: [28.658, 50.255], tokens: ['житомирщ', 'житомир', 'zhytomyr', 'бердичів', 'коростень'] },
-  { oblast: 'Rivne oblast', coords: [26.251, 50.620], tokens: ['рівненщ', 'рівн', 'rivne', 'рівного', 'рівному'] },
-  { oblast: 'Vinnytsia oblast', coords: [28.468, 49.233], tokens: ['вінниц', 'вінниці', 'vinnytsia', 'вінниця', 'жмеринк'] },
-  { oblast: 'Khmelnytskyi oblast', coords: [26.987, 49.423], tokens: ['хмельниц', 'khmelnytsk', 'хмельницьк', "кам'янець"] },
-  { oblast: 'Kirovohrad oblast', coords: [32.262, 48.508], tokens: ['кіровоград', 'kirovohrad', 'кропивниц', 'kropyvnytsk'] },
-];
-
-// Precompiled leading-boundary matchers per oblast. A token must start at a word
-// boundary — so "оріхов" no longer fires inside "горіхове" (hazel) — but trailing
-// letters are allowed because the tokens are declension stems ("запоріж" must
-// still match "запоріжжя"). Compiled once, not per request.
-const OBLAST_MATCHERS = OBLAST_REFS.map((ref) => ({
-  ref,
-  regexes: ref.tokens.map(
-    (t) => new RegExp(`(?<![\\p{L}\\p{N}])${t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'iu')
-  ),
-}));
 
 const WINDOW_HOURS = 1.5;
 const WINDOW_MS = WINDOW_HOURS * 60 * 60 * 1000;
@@ -142,12 +102,6 @@ const trackSeed: Promise<TrackEntry[]> = loadTrackEntries(KAB_TRACKS_FILE);
 
 function isKab(text: string): boolean {
   return KAB_PATTERNS.some((re) => re.test(text));
-}
-
-function matchOblasts(lowerText: string): OblastRef[] {
-  return OBLAST_MATCHERS
-    .filter(({ regexes }) => regexes.some((re) => re.test(lowerText)))
-    .map(({ ref }) => ref);
 }
 
 // Extract { text, ts } per message from a Telegram /s/ HTML page.

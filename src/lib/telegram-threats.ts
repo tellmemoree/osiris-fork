@@ -9,10 +9,21 @@
  * getThreatCorpus()   — returns TgMessage[] (cached 15 min)
  * classifyWeapons()   — maps a message to the WeaponType(s) it mentions
  * matchOblasts()      — maps a message to the OblastRef(s) it names
+ *                       (defined in conflict-geo.ts, re-exported here — see below)
  */
 
 import { stealthFetch } from '@/lib/stealthFetch';
-import { findBestPlace, findAllNamedPlaces } from '@/lib/conflict-geo';
+import { findBestPlace, findAllNamedPlaces, matchOblasts, OBLAST_MATCHERS } from '@/lib/conflict-geo';
+import type { OblastRef } from '@/lib/conflict-geo';
+
+// Re-exported so every existing call site (drone-threats, weapon-threats,
+// mig31k, strategic-thermal, railway-incidents) keeps importing matchOblasts/
+// OblastRef/OBLAST_REFS/OBLAST_MATCHERS from telegram-threats.ts unchanged —
+// the actual definitions now live in conflict-geo.ts (consolidated alongside
+// the new raion-center gazetteer; see conflict-geo.ts's module header).
+export { matchOblasts, OBLAST_MATCHERS };
+export type { OblastRef };
+export { OBLAST_REFS } from '@/lib/conflict-geo';
 
 // ── channels ────────────────────────────────────────────────────────────────
 
@@ -47,12 +58,6 @@ export interface TgMessage {
   channel: string; // bare channel name, e.g. "war_monitor"
 }
 
-export interface OblastRef {
-  oblast: string;
-  coords: [number, number]; // [lng, lat] GeoJSON order
-  tokens: string[];
-}
-
 export type WeaponType = 'KAB' | 'CRUISE' | 'BALLISTIC' | 'DRONE' | 'KINZHAL' | 'S300' | 'KH22';
 
 export interface RouteWaypoint {
@@ -74,49 +79,6 @@ export interface RouteWave {
   startedAt: string;    // ISO of first waypoint
   waypoints: RouteWaypoint[];
 }
-
-// ── oblast refs (verbatim from kab-threats) ─────────────────────────────────
-
-export const OBLAST_REFS: OblastRef[] = [
-  { oblast: 'Kharkiv oblast',        coords: [36.230, 49.990], tokens: ['харків', 'харківщ', 'kharkiv', 'чугуїв', "куп'янськ", 'kupiansk', 'вовчанськ', 'vovchansk', 'ізюм', 'izium'] },
-  { oblast: 'Sumy oblast',           coords: [34.800, 50.910], tokens: ['сумщ', 'сумськ', 'сумської', 'м. суми', 'sumy', 'шостк', 'конотоп'] },
-  { oblast: 'Zaporizhzhia oblast',   coords: [35.139, 47.838], tokens: ['запоріж', 'запорізьк', 'zaporizh', 'оріхів', 'оріхов', 'гуляйполе', 'huliaipole', 'токмак', 'tokmak'] },
-  { oblast: 'Kherson oblast',        coords: [32.601, 46.635], tokens: ['херсон', 'херсонщ', 'kherson', 'берислав'] },
-  { oblast: 'Donetsk oblast',        coords: [37.800, 48.000], tokens: ['донеччин', 'донецьк', 'donetsk', 'краматорськ', 'kramatorsk', "слов'янськ", 'покровськ', 'pokrovsk', 'костянтинівк', 'часів яр', 'торецьк', 'toretsk', 'авдіїв'] },
-  { oblast: 'Dnipropetrovsk oblast', coords: [35.046, 48.465], tokens: ['дніпропетровщ', 'дніпро', 'нікополь', 'nikopol', 'кривий ріг', 'kryvyi rih', 'павлоград', 'марганець'] },
-  { oblast: 'Chernihiv oblast',      coords: [31.285, 51.498], tokens: ['чернігівщ', 'чернігів', 'chernihiv', 'новгород-сіверськ', 'семенівк'] },
-  { oblast: 'Mykolaiv oblast',       coords: [31.994, 46.975], tokens: ['миколаївщ', 'миколаїв', 'mykolaiv', 'очаків', 'снігурівк'] },
-  { oblast: 'Poltava oblast',        coords: [34.551, 49.588], tokens: ['полтавщ', 'полтав', 'poltava', 'кременчук', 'kremenchuk', 'лубни'] },
-  { oblast: 'Luhansk oblast',        coords: [39.300, 48.566], tokens: ['луганщ', 'луганськ', 'luhansk', 'luhans', 'рубіжн', 'сєвєродонецьк', 'лисичанськ'] },
-  { oblast: 'Odesa oblast',          coords: [30.723, 46.482], tokens: ['одещ', 'одеськ', 'odesa', 'odessa', 'ізмаїл', 'чорноморськ', 'южне'] },
-  { oblast: 'Kyiv oblast',           coords: [30.523, 50.450], tokens: ['київщ', 'київськ', 'kyivsk', 'бровар', 'бориспіл', 'vasylkiv', 'васильків'] },
-  { oblast: 'Kyiv City',             coords: [30.523, 50.450], tokens: ['kyiv', 'київ'] },
-  { oblast: 'Zhytomyr oblast',       coords: [28.658, 50.255], tokens: ['житомирщ', 'житомир', 'zhytomyr', 'бердичів', 'коростень'] },
-  // Bare 'рівн' dropped — collides with 'рівня'/'рівний' (level/equal); the
-  // remaining tokens are long enough to stay specific to the place name.
-  { oblast: 'Rivne oblast',          coords: [26.251, 50.620], tokens: ['рівненщ', 'рівненськ', 'rivne', 'рівного', 'рівному', 'м. рівне'] },
-  { oblast: 'Vinnytsia oblast',      coords: [28.468, 49.233], tokens: ['вінниц', 'вінниці', 'vinnytsia', 'вінниця', 'жмеринк'] },
-  { oblast: 'Khmelnytskyi oblast',   coords: [26.987, 49.423], tokens: ['хмельниц', 'khmelnytsk', 'хмельницьк', "кам'янець"] },
-  { oblast: 'Kirovohrad oblast',     coords: [32.262, 48.508], tokens: ['кіровоград', 'kirovohrad', 'кропивниц', 'kropyvnytsk'] },
-  // ── Western oblasts (previously missing — strikes/drones reach these) ─────
-  { oblast: 'Lviv oblast',           coords: [24.030, 49.840], tokens: ['львів', 'львівщ', 'львівськ', 'lviv', 'дрогобич', 'drohobych', 'стрий', 'stryi'] },
-  { oblast: 'Ternopil oblast',       coords: [25.595, 49.554], tokens: ['тернопіл', 'тернопільщ', 'тернопільськ', 'ternopil', 'кременець'] },
-  { oblast: 'Volyn oblast',          coords: [25.325, 50.747], tokens: ['волин', 'волинськ', 'волинщ', 'volyn', 'луцьк', 'lutsk', 'ковель'] },
-  { oblast: 'Ivano-Frankivsk oblast',coords: [24.711, 48.923], tokens: ['івано-франківськ', 'івано-франківщ', 'прикарпатт', 'ivano-frankivsk', 'коломия', 'калуш'] },
-  { oblast: 'Zakarpattia oblast',    coords: [22.288, 48.621], tokens: ['закарпат', 'zakarpat', 'ужгород', 'uzhhorod', 'мукачев', 'mukachevo'] },
-  { oblast: 'Chernivtsi oblast',     coords: [25.935, 48.292], tokens: ['чернівц', 'чернівецьк', 'буковин', 'chernivtsi', 'буковина'] },
-  { oblast: 'Cherkasy oblast',       coords: [32.060, 49.445], tokens: ['черкащ', 'черкаськ', 'cherkasy', 'умань', 'uman', 'черкаси'] },
-];
-
-// Precompiled leading-boundary matchers per oblast (same technique as kab-threats).
-// Leading boundary: must not be preceded by a letter/digit.
-// Trailing letters are allowed because tokens are declension stems.
-const OBLAST_MATCHERS = OBLAST_REFS.map((ref) => ({
-  ref,
-  regexes: ref.tokens.map(
-    (t) => new RegExp(`(?<![\\p{L}\\p{N}])${t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'iu'),
-  ),
-}));
 
 // ── railway / rail infrastructure patterns ───────────────────────────────────
 
@@ -423,16 +385,6 @@ export function classifyWeapons(text: string): WeaponType[] {
     }
   }
   return found;
-}
-
-/**
- * Returns which UA oblasts are mentioned in a message.
- * Uses leading-boundary regexes compiled once at module load.
- */
-export function matchOblasts(text: string): OblastRef[] {
-  return OBLAST_MATCHERS
-    .filter(({ regexes }) => regexes.some((re) => re.test(text)))
-    .map(({ ref }) => ref);
 }
 
 // ── geo event extraction ─────────────────────────────────────────────────────

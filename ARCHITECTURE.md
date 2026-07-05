@@ -186,6 +186,40 @@ Env vars required for full enrichment: SHODAN_API_KEY (in osiris container .env)
   ├─ Alarm cross-ref (air-raid-history.json)
   └─ Route polylines + alarm-confirmed rings
 
+Oblast/raion attribution (2026-07, feat/raion-gazetteer)
+  ├─ Single source of truth: src/lib/conflict-geo.ts
+  │     OBLAST_REFS, RAION_CENTERS, OBLAST_MATCHERS, matchOblasts()
+  │     — consolidated here from telegram-threats.ts + kab-threats/route.ts,
+  │       which each kept an independent (and drifting) copy before this
+  ├─ RAION_CENTERS: 140 entries total — 126 mainland raion-capital towns +
+  │     10 Crimea (coords via Wikidata P36) + 4 named hromada-center
+  │     exceptions (Baturyn, Korop, Sosnytsia, Kulykivka — sub-raion towns
+  │     that specialized monitor channels name directly; NOT full
+  │     hromada-level, that's ~1,470 and out of scope). Crimea rows feed
+  │     PLACE_COORDS pinning only — no matching OBLAST_REFS entry to merge
+  │     tokens into.
+  ├─ A few tokens are deliberately Latin-only or omitted where the Cyrillic
+  │     form collides with a common word (see inline comments per entry) —
+  │     e.g. 'сама' (Самар)/'коси' (Косів)/'сарна' (Сарни); 'Щастя' and
+  │     'Короп' are full homographs of common nouns and can't be fixed by
+  │     lengthening — Short accepted-risk on Короп since it's one of the 4
+  │     required test towns.
+  ├─ Module load order matters: RAION_CENTERS tokens are folded into
+  │     OBLAST_REFS[].tokens AND into PLACE_COORDS, both BEFORE their
+  │     respective consumers (OBLAST_MATCHERS, COMPILED_PLACE_GAZETTEER) are
+  │     compiled — reversing either merge loop means raion tokens silently
+  │     never match (same footgun class as the place/subtype/bearing
+  │     field-threading bug in threat-tracks.ts)
+  ├─ telegram-threats.ts re-exports matchOblasts/OblastRef/OBLAST_REFS/
+  │     OBLAST_MATCHERS so drone-threats/weapon-threats/mig31k/
+  │     strategic-thermal/railway-incidents import unchanged
+  ├─ kab-threats/route.ts now imports matchOblasts from conflict-geo.ts
+  │     directly (its previously-independent, less-complete OBLAST_REFS list
+  │     — missing all western oblasts — is gone; upgraded to the shared list)
+  └─ ru-air-raids/route.ts keeps its own separate RU_OBLAST_REFS/matchOblasts
+        (different domain — Russian oblasts, not Ukrainian — intentionally
+        not consolidated)
+
 /api/neptun-alerts
   ├─ neptun.in.ua/api/v1/alerts (Cloudflare-protected → stealthFetch)
   ├─ Version-gated 2-min module cache + inflight coalescing; never 5xx (stale-on-error)

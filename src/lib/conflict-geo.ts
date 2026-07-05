@@ -6,8 +6,295 @@
  * source of truth for GEO_DICT, RSS_FEEDS, CONFLICT_KEYWORDS, and the
  * deduplication / confidence-tiering algorithm.
  *
- * NOTE: GEO_DICT tuples are [lng, lat] (GeoJSON order).
+ * Also the single source of truth for oblast/raion attribution — OBLAST_REFS,
+ * RAION_CENTERS, and matchOblasts() (consolidated here from telegram-threats.ts
+ * and kab-threats/route.ts, which previously each kept an independent copy).
+ * telegram-threats.ts re-exports matchOblasts/OblastRef/OBLAST_REFS/
+ * OBLAST_MATCHERS so existing call sites (drone-threats, weapon-threats,
+ * mig31k, strategic-thermal, railway-incidents) are unaffected.
+ *
+ * NOTE: GEO_DICT tuples are [lng, lat] (GeoJSON order). OBLAST_REFS.coords is
+ * also [lng, lat]. PLACE_COORDS/RAION_CENTERS are [lat, lng] — do not mix.
  */
+
+// ── oblast refs (moved verbatim from telegram-threats.ts — see matchOblasts()) ─
+//
+// Also re-exported from telegram-threats.ts so every existing call site
+// (drone-threats, weapon-threats, mig31k, strategic-thermal, railway-incidents)
+// keeps working unchanged.
+
+export interface OblastRef {
+  oblast: string;
+  coords: [number, number]; // [lng, lat] GeoJSON order
+  tokens: string[];
+}
+
+export const OBLAST_REFS: OblastRef[] = [
+  { oblast: 'Kharkiv oblast',        coords: [36.230, 49.990], tokens: ['харків', 'харківщ', 'kharkiv', 'чугуїв', "куп'янськ", 'kupiansk', 'вовчанськ', 'vovchansk', 'ізюм', 'izium'] },
+  { oblast: 'Sumy oblast',           coords: [34.800, 50.910], tokens: ['сумщ', 'сумськ', 'сумської', 'м. суми', 'sumy', 'шостк', 'конотоп'] },
+  { oblast: 'Zaporizhzhia oblast',   coords: [35.139, 47.838], tokens: ['запоріж', 'запорізьк', 'zaporizh', 'оріхів', 'оріхов', 'гуляйполе', 'huliaipole', 'токмак', 'tokmak'] },
+  { oblast: 'Kherson oblast',        coords: [32.601, 46.635], tokens: ['херсон', 'херсонщ', 'kherson', 'берислав'] },
+  { oblast: 'Donetsk oblast',        coords: [37.800, 48.000], tokens: ['донеччин', 'донецьк', 'donetsk', 'краматорськ', 'kramatorsk', "слов'янськ", 'покровськ', 'pokrovsk', 'костянтинівк', 'часів яр', 'торецьк', 'toretsk', 'авдіїв'] },
+  { oblast: 'Dnipropetrovsk oblast', coords: [35.046, 48.465], tokens: ['дніпропетровщ', 'дніпро', 'нікополь', 'nikopol', 'кривий ріг', 'kryvyi rih', 'павлоград', 'марганець'] },
+  { oblast: 'Chernihiv oblast',      coords: [31.285, 51.498], tokens: ['чернігівщ', 'чернігів', 'chernihiv', 'новгород-сіверськ', 'семенівк'] },
+  { oblast: 'Mykolaiv oblast',       coords: [31.994, 46.975], tokens: ['миколаївщ', 'миколаїв', 'mykolaiv', 'очаків', 'снігурівк'] },
+  { oblast: 'Poltava oblast',        coords: [34.551, 49.588], tokens: ['полтавщ', 'полтав', 'poltava', 'кременчук', 'kremenchuk', 'лубни'] },
+  { oblast: 'Luhansk oblast',        coords: [39.300, 48.566], tokens: ['луганщ', 'луганськ', 'luhansk', 'luhans', 'рубіжн', 'сєвєродонецьк', 'лисичанськ'] },
+  { oblast: 'Odesa oblast',          coords: [30.723, 46.482], tokens: ['одещ', 'одеськ', 'odesa', 'odessa', 'ізмаїл', 'чорноморськ', 'южне'] },
+  { oblast: 'Kyiv oblast',           coords: [30.523, 50.450], tokens: ['київщ', 'київськ', 'kyivsk', 'бровар', 'бориспіл', 'vasylkiv', 'васильків'] },
+  { oblast: 'Kyiv City',             coords: [30.523, 50.450], tokens: ['kyiv', 'київ'] },
+  { oblast: 'Zhytomyr oblast',       coords: [28.658, 50.255], tokens: ['житомирщ', 'житомир', 'zhytomyr', 'бердичів', 'коростень'] },
+  // Bare 'рівн' dropped — collides with 'рівня'/'рівний' (level/equal); the
+  // remaining tokens are long enough to stay specific to the place name.
+  { oblast: 'Rivne oblast',          coords: [26.251, 50.620], tokens: ['рівненщ', 'рівненськ', 'rivne', 'рівного', 'рівному', 'м. рівне'] },
+  { oblast: 'Vinnytsia oblast',      coords: [28.468, 49.233], tokens: ['вінниц', 'вінниці', 'vinnytsia', 'вінниця', 'жмеринк'] },
+  { oblast: 'Khmelnytskyi oblast',   coords: [26.987, 49.423], tokens: ['хмельниц', 'khmelnytsk', 'хмельницьк', "кам'янець"] },
+  { oblast: 'Kirovohrad oblast',     coords: [32.262, 48.508], tokens: ['кіровоград', 'kirovohrad', 'кропивниц', 'kropyvnytsk'] },
+  // ── Western oblasts (previously missing — strikes/drones reach these) ─────
+  { oblast: 'Lviv oblast',           coords: [24.030, 49.840], tokens: ['львів', 'львівщ', 'львівськ', 'lviv', 'дрогобич', 'drohobych', 'стрий', 'stryi'] },
+  { oblast: 'Ternopil oblast',       coords: [25.595, 49.554], tokens: ['тернопіл', 'тернопільщ', 'тернопільськ', 'ternopil', 'кременець'] },
+  { oblast: 'Volyn oblast',          coords: [25.325, 50.747], tokens: ['волин', 'волинськ', 'волинщ', 'volyn', 'луцьк', 'lutsk', 'ковель'] },
+  { oblast: 'Ivano-Frankivsk oblast',coords: [24.711, 48.923], tokens: ['івано-франківськ', 'івано-франківщ', 'прикарпатт', 'ivano-frankivsk', 'коломия', 'калуш'] },
+  { oblast: 'Zakarpattia oblast',    coords: [22.288, 48.621], tokens: ['закарпат', 'zakarpat', 'ужгород', 'uzhhorod', 'мукачев', 'mukachevo'] },
+  { oblast: 'Chernivtsi oblast',     coords: [25.935, 48.292], tokens: ['чернівц', 'чернівецьк', 'буковин', 'chernivtsi', 'буковина'] },
+  { oblast: 'Cherkasy oblast',       coords: [32.060, 49.445], tokens: ['черкащ', 'черкаськ', 'cherkasy', 'умань', 'uman', 'черкаси'] },
+];
+
+// ── raion-center gazetteer (post-2020 reform, ~136 raions + 4 hromada exceptions) ──
+//
+// Each entry is a raion's administrative-center town, with real coordinates
+// sourced from Wikidata (P36 admin-center-of-raion property, cross-checked
+// against Wikipedia/decentralization.gov.ua for the handful the SPARQL query
+// resolved incorrectly — see inline overrides during generation). Tokens are
+// lowercase declension stems following the exact convention already used in
+// OBLAST_REFS.tokens (leading-boundary-only regex match, e.g. 'запоріж'
+// matches 'запоріжжя') — stems avoid trailing letters so genitive/dative/
+// instrumental forms still match, EXCEPT where the naive stem would collide
+// with a common Ukrainian word (see 'рівне'/'сумськ' below, matching the
+// existing 'рівн' exclusion already documented on Rivne oblast above).
+//
+// Scope note / deviation from the strict "136 raion capitals" spec: four
+// entries below (Baturyn, Korop, Sosnytsia, Kulykivka) are NOT raion capitals
+// — they are hromada centers one level below the raion (Nizhyn, Novhorod-
+// Siverskyi, Koriukivka, and Chernihiv raions respectively). They are the
+// four concrete failing examples from live investigation (real Telegram text:
+// "1 північніше Батурина", "1 східніше Коропа", "1 південніше Сосниці",
+// "1 північніше Куликівки" — all silently dropped before this fix) and are a
+// hard requirement from the spec, so they're included as named exceptions
+// rather than expanding scope to full hromada-level (~1,470 hromadas, out of
+// bounds for this change).
+export interface RaionCenter {
+  town: string;
+  oblast: string;
+  lat: number;
+  lng: number;
+  tokens: string[];
+}
+
+export const RAION_CENTERS: RaionCenter[] = [
+  { town: 'Вінниця', oblast: 'Vinnytsia oblast', lat: 49.2372, lng: 28.4672, tokens: ['вінни', 'vinnytsia'] },
+  { town: 'Гайсин', oblast: 'Vinnytsia oblast', lat: 48.8094, lng: 29.3906, tokens: ['гайси', 'haisyn'] },
+  { town: 'Жмеринка', oblast: 'Vinnytsia oblast', lat: 49.0425, lng: 28.0992, tokens: ['жмерин', 'zhmerynka'] },
+  { town: 'Могилів-Подільський', oblast: 'Vinnytsia oblast', lat: 48.45, lng: 27.7833, tokens: ['могилів-подільський', 'mohyliv-podilskyi'] },
+  { town: 'Тульчин', oblast: 'Vinnytsia oblast', lat: 48.6744, lng: 28.8497, tokens: ['тульч', 'tulchyn'] },
+  { town: 'Хмільник', oblast: 'Vinnytsia oblast', lat: 49.55, lng: 27.9667, tokens: ['хмільн', 'khmilnyk'] },
+  { town: 'Володимир', oblast: 'Volyn oblast', lat: 50.8481, lng: 24.3222, tokens: ['володим', 'volodymyr'] },
+  { town: 'Камінь-Каширський', oblast: 'Volyn oblast', lat: 51.6242, lng: 24.9606, tokens: ['камінь-каширський', 'kamin-kashyrskyi'] },
+  { town: 'Ковель', oblast: 'Volyn oblast', lat: 51.2167, lng: 24.7167, tokens: ['ковел', 'kovel'] },
+  { town: 'Луцьк', oblast: 'Volyn oblast', lat: 50.7478, lng: 25.3244, tokens: ['луць', 'lutsk'] },
+  { town: 'Дніпро', oblast: 'Dnipropetrovsk oblast', lat: 48.4675, lng: 35.04, tokens: ['дніпр', 'dnipro'] },
+  { town: 'Кам\'янське', oblast: 'Dnipropetrovsk oblast', lat: 48.5167, lng: 34.6133, tokens: ['кам\'янсь', 'kamianske'] },
+  { town: 'Кривий Ріг', oblast: 'Dnipropetrovsk oblast', lat: 47.91, lng: 33.39, tokens: ['кривий ріг', 'kryvyi rih'] },
+  { town: 'Нікополь', oblast: 'Dnipropetrovsk oblast', lat: 47.5667, lng: 34.4, tokens: ['нікопо', 'nikopol'] },
+  { town: 'Павлоград', oblast: 'Dnipropetrovsk oblast', lat: 48.52, lng: 35.87, tokens: ['павлогр', 'pavlohrad'] },
+  // Cyrillic token intentionally omitted: 'сама' collides with the common
+  // pronoun ("she/herself"), and the disambiguated form 'самар' collides with
+  // the pre-existing PLACE_COORDS entry for Samara, Russia (a strike-target
+  // city — see the Russian-cities section below). Coordinates kept for
+  // documentation; this raion center won't auto-match until a safe,
+  // non-colliding token is found.
+  { town: 'Самар', oblast: 'Dnipropetrovsk oblast', lat: 48.6316, lng: 35.2245, tokens: [] },
+  { town: 'Синельникове', oblast: 'Dnipropetrovsk oblast', lat: 48.3178, lng: 35.5119, tokens: ['синельнико', 'synelnykove'] },
+  { town: 'Бахмут', oblast: 'Donetsk oblast', lat: 48.5947, lng: 38.0008, tokens: ['бахму', 'bakhmut'] },
+  { town: 'Волноваха', oblast: 'Donetsk oblast', lat: 47.5994, lng: 37.4999, tokens: ['волнова', 'volnovakha'] },
+  { town: 'Горлівка', oblast: 'Donetsk oblast', lat: 48.3336, lng: 38.0925, tokens: ['горлів', 'horlivka'] },
+  { town: 'Донецьк', oblast: 'Donetsk oblast', lat: 48.0158, lng: 37.8028, tokens: ['донец', 'donetsk'] },
+  { town: 'Кальміуське', oblast: 'Donetsk oblast', lat: 47.6667, lng: 38.0667, tokens: ['кальміусь', 'kalmiuske'] },
+  { town: 'Краматорськ', oblast: 'Donetsk oblast', lat: 48.7392, lng: 37.5839, tokens: ['краматорс', 'kramatorsk'] },
+  { town: 'Маріуполь', oblast: 'Donetsk oblast', lat: 47.1306, lng: 37.5639, tokens: ['маріупо', 'mariupol'] },
+  { town: 'Покровськ', oblast: 'Donetsk oblast', lat: 48.2833, lng: 37.1833, tokens: ['покровс', 'pokrovsk'] },
+  { town: 'Бердичів', oblast: 'Zhytomyr oblast', lat: 49.8919, lng: 28.6, tokens: ['бердич', 'berdychiv'] },
+  { town: 'Житомир', oblast: 'Zhytomyr oblast', lat: 50.2544, lng: 28.6578, tokens: ['житом', 'zhytomyr'] },
+  { town: 'Звягель', oblast: 'Zhytomyr oblast', lat: 50.5833, lng: 27.6333, tokens: ['звяге', 'zviahel'] },
+  { town: 'Коростень', oblast: 'Zhytomyr oblast', lat: 50.95, lng: 28.65, tokens: ['коросте', 'korosten'] },
+  { town: 'Берегове', oblast: 'Zakarpattia oblast', lat: 48.2025, lng: 22.6375, tokens: ['берего', 'berehove'] },
+  { town: 'Мукачево', oblast: 'Zakarpattia oblast', lat: 48.4414, lng: 22.7136, tokens: ['мукаче', 'mukachevo'] },
+  // 'рахі'/'рахів' dropped as bare stems — both are leading substrings of
+  // 'рахівниця' (abacus); 'рахова' (genitive) doesn't collide.
+  { town: 'Рахів', oblast: 'Zakarpattia oblast', lat: 48.05, lng: 24.2167, tokens: ['рахова', 'rakhiv'] },
+  { town: 'Тячів', oblast: 'Zakarpattia oblast', lat: 48.0114, lng: 23.5722, tokens: ['тячі', 'tiachiv'] },
+  { town: 'Ужгород', oblast: 'Zakarpattia oblast', lat: 48.6239, lng: 22.295, tokens: ['ужгор', 'uzhhorod'] },
+  // Bare 'хуст' dropped — collides with 'хустка'/'хустині' (headscarf); the
+  // declined forms below are long enough to stay specific to the place name.
+  { town: 'Хуст', oblast: 'Zakarpattia oblast', lat: 48.1814, lng: 23.2978, tokens: ['хуста', 'хусті', 'khust'] },
+  { town: 'Бердянськ', oblast: 'Zaporizhzhia oblast', lat: 46.7556, lng: 36.7889, tokens: ['бердянс', 'berdiansk'] },
+  { town: 'Василівка', oblast: 'Zaporizhzhia oblast', lat: 47.4435, lng: 35.2802, tokens: ['василів', 'vasylivka'] },
+  { town: 'Запоріжжя', oblast: 'Zaporizhzhia oblast', lat: 47.85, lng: 35.1175, tokens: ['запоріж', 'zaporizhzhia'] },
+  { town: 'Мелітополь', oblast: 'Zaporizhzhia oblast', lat: 46.8489, lng: 35.3675, tokens: ['мелітопо', 'melitopol'] },
+  // Bare 'полог' dropped — collides with 'пологовий'/'пологів' (maternity,
+  // adj.); the declined forms below diverge from that word at char 6.
+  { town: 'Пологи', oblast: 'Zaporizhzhia oblast', lat: 47.4796, lng: 36.2611, tokens: ['пологи', 'пологів', 'пологах', 'pology'] },
+  { town: 'Верховина', oblast: 'Ivano-Frankivsk oblast', lat: 48.1517, lng: 24.8136, tokens: ['верхови', 'verkhovyna'] },
+  { town: 'Івано-Франківськ', oblast: 'Ivano-Frankivsk oblast', lat: 48.9228, lng: 24.7106, tokens: ['івано-франківськ', 'ivano-frankivsk'] },
+  { town: 'Калуш', oblast: 'Ivano-Frankivsk oblast', lat: 49.0442, lng: 24.3597, tokens: ['калу', 'kalush'] },
+  { town: 'Коломия', oblast: 'Ivano-Frankivsk oblast', lat: 48.5306, lng: 25.0403, tokens: ['колом', 'kolomyia'] },
+  // Bare 'косі' dropped — collides with 'косіння' (mowing); 'косів' (full
+  // nominative) diverges from it at char 5.
+  { town: 'Косів', oblast: 'Ivano-Frankivsk oblast', lat: 48.315, lng: 25.0953, tokens: ['косів', 'kosiv'] },
+  { town: 'Надвірна', oblast: 'Ivano-Frankivsk oblast', lat: 48.6333, lng: 24.5833, tokens: ['надвір', 'nadvirna'] },
+  { town: 'Біла Церква', oblast: 'Kyiv oblast', lat: 49.7956, lng: 30.1167, tokens: ['біла церква', 'bila tserkva'] },
+  { town: 'Бориспіль', oblast: 'Kyiv oblast', lat: 50.35, lng: 30.95, tokens: ['бориспі', 'boryspil'] },
+  { town: 'Бровари', oblast: 'Kyiv oblast', lat: 50.5111, lng: 30.79, tokens: ['брова', 'brovary'] },
+  // Bare 'буча' dropped — it's a homograph of the common noun 'буча'
+  // (commotion/fuss); 'бучан' (adjectival/resident form) is specific enough.
+  { town: 'Буча', oblast: 'Kyiv oblast', lat: 50.5486, lng: 30.2208, tokens: ['бучан', 'bucha'] },
+  { town: 'Вишгород', oblast: 'Kyiv oblast', lat: 50.5833, lng: 30.4853, tokens: ['вишгор', 'vyshhorod'] },
+  { town: 'Обухів', oblast: 'Kyiv oblast', lat: 50.1109, lng: 30.6269, tokens: ['обухі', 'obukhiv'] },
+  { town: 'Фастів', oblast: 'Kyiv oblast', lat: 50.0747, lng: 29.9181, tokens: ['фасті', 'fastiv'] },
+  { town: 'Голованівськ', oblast: 'Kirovohrad oblast', lat: 48.38, lng: 30.4472, tokens: ['голованівс', 'holovanivsk'] },
+  { town: 'Кропивницький', oblast: 'Kirovohrad oblast', lat: 48.5103, lng: 32.2667, tokens: ['кропивницьк', 'kropyvnytskyi'] },
+  { town: 'Новоукраїнка', oblast: 'Kirovohrad oblast', lat: 48.3156, lng: 31.5269, tokens: ['новоукраїн', 'novoukrainka'] },
+  { town: 'Олександрія', oblast: 'Kirovohrad oblast', lat: 48.6667, lng: 33.1167, tokens: ['олександр', 'oleksandriia'] },
+  { town: 'Алчевськ', oblast: 'Luhansk oblast', lat: 48.4672, lng: 38.7983, tokens: ['алчевс', 'alchevsk'] },
+  { town: 'Довжанськ', oblast: 'Luhansk oblast', lat: 48.0846, lng: 39.6516, tokens: ['довжанс', 'dovzhansk'] },
+  { town: 'Луганськ', oblast: 'Luhansk oblast', lat: 48.5717, lng: 39.2973, tokens: ['луганс', 'luhansk'] },
+  { town: 'Ровеньки', oblast: 'Luhansk oblast', lat: 48.0833, lng: 39.3667, tokens: ['ровень', 'rovenky'] },
+  { town: 'Сватове', oblast: 'Luhansk oblast', lat: 49.415, lng: 38.155, tokens: ['свато', 'svatove'] },
+  { town: 'Сіверськодонецьк', oblast: 'Luhansk oblast', lat: 48.9481, lng: 38.4933, tokens: ['сіверськодонец', 'sievierodonetsk'] },
+  { town: 'Старобільськ', oblast: 'Luhansk oblast', lat: 49.2829, lng: 38.8974, tokens: ['старобільс', 'starobilsk'] },
+  // Cyrillic token omitted entirely — 'Щастя' is a full homograph of
+  // 'щастя' (happiness), not fixable by lengthening the stem. Latin-only.
+  { town: 'Щастя', oblast: 'Luhansk oblast', lat: 48.7372, lng: 39.2312, tokens: ['shchastia'] },
+  { town: 'Дрогобич', oblast: 'Lviv oblast', lat: 49.35, lng: 23.5, tokens: ['дрогоб', 'drohobych'] },
+  { town: 'Золочів', oblast: 'Lviv oblast', lat: 49.8075, lng: 24.9031, tokens: ['золоч', 'zolochiv'] },
+  { town: 'Львів', oblast: 'Lviv oblast', lat: 49.8425, lng: 24.0322, tokens: ['льві', 'lviv'] },
+  { town: 'Самбір', oblast: 'Lviv oblast', lat: 49.5167, lng: 23.2, tokens: ['самбі', 'sambir'] },
+  // Bare 'стри' dropped — collides with 'стриманий'/'стриж'; full nominative
+  // + genitive below are specific enough (matches the oblast-level token
+  // convention already used for this same town at the top of this file).
+  { town: 'Стрий', oblast: 'Lviv oblast', lat: 49.25, lng: 23.85, tokens: ['стрий', 'стрия', 'stryi'] },
+  { town: 'Шептицький', oblast: 'Lviv oblast', lat: 50.3822, lng: 24.2275, tokens: ['шептицьк', 'sheptytskyi'] },
+  { town: 'Яворів', oblast: 'Lviv oblast', lat: 49.9469, lng: 23.3931, tokens: ['яворі', 'yavoriv'] },
+  { town: 'Баштанка', oblast: 'Mykolaiv oblast', lat: 47.4, lng: 32.45, tokens: ['баштан', 'bashtanka'] },
+  { town: 'Вознесенськ', oblast: 'Mykolaiv oblast', lat: 47.5725, lng: 31.3119, tokens: ['вознесенс', 'voznesensk'] },
+  { town: 'Миколаїв', oblast: 'Mykolaiv oblast', lat: 46.975, lng: 31.995, tokens: ['микола', 'mykolaiv'] },
+  { town: 'Первомайськ', oblast: 'Mykolaiv oblast', lat: 48.0451, lng: 30.8884, tokens: ['первомайс', 'pervomaisk'] },
+  { town: 'Березівка', oblast: 'Odesa oblast', lat: 47.2002, lng: 30.9075, tokens: ['березів', 'berezivka'] },
+  { town: 'Білгород-Дністровський', oblast: 'Odesa oblast', lat: 46.1939, lng: 30.3411, tokens: ['білгород-дністровський', 'bilhorod-dnistrovskyi'] },
+  { town: 'Болград', oblast: 'Odesa oblast', lat: 45.6828, lng: 28.61, tokens: ['болгр', 'bolhrad'] },
+  { town: 'Ізмаїл', oblast: 'Odesa oblast', lat: 45.3511, lng: 28.8447, tokens: ['ізмаї', 'izmail'] },
+  { town: 'Одеса', oblast: 'Odesa oblast', lat: 46.4775, lng: 30.7326, tokens: ['одес', 'odesa'] },
+  { town: 'Подільськ', oblast: 'Odesa oblast', lat: 47.7531, lng: 29.5309, tokens: ['подільс', 'podilsk'] },
+  { town: 'Роздільна', oblast: 'Odesa oblast', lat: 46.8542, lng: 30.0717, tokens: ['розділь', 'rozdilna'] },
+  { town: 'Кременчук', oblast: 'Poltava oblast', lat: 49.0631, lng: 33.4039, tokens: ['кременч', 'kremenchuk'] },
+  { town: 'Лубни', oblast: 'Poltava oblast', lat: 50.0186, lng: 32.9869, tokens: ['лубн', 'lubny'] },
+  { town: 'Миргород', oblast: 'Poltava oblast', lat: 49.964, lng: 33.6124, tokens: ['миргор', 'myrhorod'] },
+  { town: 'Полтава', oblast: 'Poltava oblast', lat: 49.5894, lng: 34.5514, tokens: ['полта', 'poltava'] },
+  { town: 'Вараш', oblast: 'Rivne oblast', lat: 51.34, lng: 25.8508, tokens: ['вараш', 'varash'] },
+  { town: 'Дубно', oblast: 'Rivne oblast', lat: 50.3931, lng: 25.735, tokens: ['дубн', 'dubno'] },
+  { town: 'Рівне', oblast: 'Rivne oblast', lat: 50.6197, lng: 26.2514, tokens: ['рівне', 'rivne'] },
+  // Bare 'сарн' dropped — collides with 'сарна' (roe deer); the full
+  // nominative/locative forms below diverge from it at char 5.
+  { town: 'Сарни', oblast: 'Rivne oblast', lat: 51.3269, lng: 26.6331, tokens: ['сарни', 'сарнах', 'sarny'] },
+  { town: 'Конотоп', oblast: 'Sumy oblast', lat: 51.2375, lng: 33.2083, tokens: ['конот', 'konotop'] },
+  { town: 'Охтирка', oblast: 'Sumy oblast', lat: 50.3074, lng: 34.9016, tokens: ['охтир', 'okhtyrka'] },
+  { town: 'Ромни', oblast: 'Sumy oblast', lat: 50.7428, lng: 33.4879, tokens: ['ромн', 'romny'] },
+  { town: 'Суми', oblast: 'Sumy oblast', lat: 50.9067, lng: 34.7992, tokens: ['сумськ', 'sumy'] },
+  { town: 'Шостка', oblast: 'Sumy oblast', lat: 51.8657, lng: 33.4766, tokens: ['шостк', 'shostka'] },
+  { town: 'Кременець', oblast: 'Ternopil oblast', lat: 50.1081, lng: 25.7275, tokens: ['кремене', 'kremenets'] },
+  { town: 'Тернопіль', oblast: 'Ternopil oblast', lat: 49.5667, lng: 25.6, tokens: ['тернопі', 'ternopil'] },
+  { town: 'Чортків', oblast: 'Ternopil oblast', lat: 49.0167, lng: 25.8, tokens: ['чортк', 'chortkiv'] },
+  // Bare 'берест' dropped — collides with 'берестя' (birch bark); the full
+  // nominative below is long enough that 'берестя' can't match it.
+  { town: 'Берестин', oblast: 'Kharkiv oblast', lat: 49.3719, lng: 35.4569, tokens: ['берестин', 'berestyn'] },
+  { town: 'Богодухів', oblast: 'Kharkiv oblast', lat: 50.1608, lng: 35.5164, tokens: ['богодух', 'bohodukhiv'] },
+  { town: 'Ізюм', oblast: 'Kharkiv oblast', lat: 49.1958, lng: 37.2803, tokens: ['ізюм', 'izium'] },
+  { town: 'Куп\'янськ', oblast: 'Kharkiv oblast', lat: 49.7114, lng: 37.6139, tokens: ['куп\'янс', 'kupiansk'] },
+  { town: 'Лозова', oblast: 'Kharkiv oblast', lat: 48.8892, lng: 36.3161, tokens: ['лозов', 'lozova'] },
+  { town: 'Харків', oblast: 'Kharkiv oblast', lat: 49.9925, lng: 36.2311, tokens: ['харкі', 'kharkiv'] },
+  { town: 'Чугуїв', oblast: 'Kharkiv oblast', lat: 49.8372, lng: 36.6899, tokens: ['чугуї', 'chuhuiv'] },
+  { town: 'Берислав', oblast: 'Kherson oblast', lat: 46.8333, lng: 33.4167, tokens: ['берисл', 'beryslav'] },
+  { town: 'Генічеськ', oblast: 'Kherson oblast', lat: 46.1769, lng: 34.7989, tokens: ['генічес', 'henichesk'] },
+  { town: 'Нова Каховка', oblast: 'Kherson oblast', lat: 46.755, lng: 33.375, tokens: ['нова каховка', 'nova kakhovka'] },
+  { town: 'Скадовськ', oblast: 'Kherson oblast', lat: 46.1167, lng: 32.9167, tokens: ['скадовс', 'skadovsk'] },
+  { town: 'Херсон', oblast: 'Kherson oblast', lat: 46.6425, lng: 32.625, tokens: ['херсо', 'kherson'] },
+  { town: 'Кам\'янець-Подільський', oblast: 'Khmelnytskyi oblast', lat: 48.6806, lng: 26.5806, tokens: ['кам\'янець-подільський', 'kamianets-podilskyi'] },
+  { town: 'Хмельницький', oblast: 'Khmelnytskyi oblast', lat: 49.423, lng: 26.9871, tokens: ['хмельницьк', 'khmelnytskyi'] },
+  { town: 'Шепетівка', oblast: 'Khmelnytskyi oblast', lat: 50.1833, lng: 27.0667, tokens: ['шепетів', 'shepetivka'] },
+  { town: 'Звенигородка', oblast: 'Cherkasy oblast', lat: 49.0833, lng: 30.9667, tokens: ['звенигород', 'zvenyhorodka'] },
+  { town: 'Золотоноша', oblast: 'Cherkasy oblast', lat: 49.6667, lng: 32.0333, tokens: ['золотоно', 'zolotonosha'] },
+  { town: 'Умань', oblast: 'Cherkasy oblast', lat: 48.75, lng: 30.2167, tokens: ['уман', 'uman'] },
+  { town: 'Черкаси', oblast: 'Cherkasy oblast', lat: 49.4444, lng: 32.0597, tokens: ['черка', 'cherkasy'] },
+  { town: 'Вижниця', oblast: 'Chernivtsi oblast', lat: 48.25, lng: 25.1917, tokens: ['вижни', 'vyzhnytsia'] },
+  { town: 'Кельменці', oblast: 'Chernivtsi oblast', lat: 48.4615, lng: 26.836, tokens: ['кельмен', 'kelmentsi'] },
+  { town: 'Чернівці', oblast: 'Chernivtsi oblast', lat: 48.2908, lng: 25.9344, tokens: ['чернів', 'chernivtsi'] },
+  { town: 'Корюківка', oblast: 'Chernihiv oblast', lat: 51.7753, lng: 32.2497, tokens: ['корюків', 'koriukivka'] },
+  { town: 'Ніжин', oblast: 'Chernihiv oblast', lat: 51.0474, lng: 31.8805, tokens: ['ніжи', 'nizhyn'] },
+  { town: 'Новгород-Сіверський', oblast: 'Chernihiv oblast', lat: 51.9972, lng: 33.2667, tokens: ['новгород-сіверський', 'novhorod-siverskyi'] },
+  { town: 'Прилуки', oblast: 'Chernihiv oblast', lat: 50.6, lng: 32.4, tokens: ['прилу', 'pryluky'] },
+  { town: 'Чернігів', oblast: 'Chernihiv oblast', lat: 51.4939, lng: 31.2947, tokens: ['черніг', 'chernihiv'] },
+  { town: 'Бахчисарай', oblast: 'Crimea', lat: 44.7528, lng: 33.8608, tokens: ['бахчисар', 'bakhchysarai'] },  // Crimea raion — no OBLAST_REFS("Crimea") entry today; kept for PLACE_COORDS pinning only
+  { town: 'Білогірськ', oblast: 'Crimea', lat: 45.0544, lng: 34.6022, tokens: ['білогірс', 'bilohirsk'] },  // Crimea raion — no OBLAST_REFS("Crimea") entry today; kept for PLACE_COORDS pinning only
+  { town: 'Джанкой', oblast: 'Crimea', lat: 45.7086, lng: 34.3933, tokens: ['джанк', 'dzhankoi'] },  // Crimea raion — no OBLAST_REFS("Crimea") entry today; kept for PLACE_COORDS pinning only
+  { town: 'Євпаторія', oblast: 'Crimea', lat: 45.2, lng: 33.3583, tokens: ['євпатор', 'yevpatoria'] },  // Crimea raion — no OBLAST_REFS("Crimea") entry today; kept for PLACE_COORDS pinning only
+  { town: 'Керч', oblast: 'Crimea', lat: 45.3607, lng: 36.4706, tokens: ['керч', 'kerch'] },  // Crimea raion — no OBLAST_REFS("Crimea") entry today; kept for PLACE_COORDS pinning only
+  { town: 'Курман', oblast: 'Crimea', lat: 45.4978, lng: 34.295, tokens: ['курма', 'kurman'] },  // Crimea raion — no OBLAST_REFS("Crimea") entry today; kept for PLACE_COORDS pinning only
+  { town: 'Яни Капу', oblast: 'Crimea', lat: 45.9675, lng: 33.8003, tokens: ['яни капу', 'yani kapu'] },  // Crimea raion — no OBLAST_REFS("Crimea") entry today; kept for PLACE_COORDS pinning only
+  { town: 'Сімферополь', oblast: 'Crimea', lat: 44.9484, lng: 34.1, tokens: ['сімферопо', 'simferopol'] },  // Crimea raion — no OBLAST_REFS("Crimea") entry today; kept for PLACE_COORDS pinning only
+  { town: 'Феодосія', oblast: 'Crimea', lat: 45.0333, lng: 35.3833, tokens: ['феодос', 'feodosia'] },  // Crimea raion — no OBLAST_REFS("Crimea") entry today; kept for PLACE_COORDS pinning only
+  { town: 'Ялта', oblast: 'Crimea', lat: 44.4994, lng: 34.1553, tokens: ['ялт', 'yalta'] },  // Crimea raion — no OBLAST_REFS("Crimea") entry today; kept for PLACE_COORDS pinning only
+  // ── hromada-center exceptions (see note above) — required by spec ──────────
+  { town: 'Батурин', oblast: 'Chernihiv oblast', lat: 51.3413, lng: 32.8798, tokens: ['батури', 'baturyn'] },
+  // 'короп' is a full homograph of the common noun 'короп' (carp, the fish)
+  // — not fixable by lengthening, since the town's own nominative form IS
+  // the colliding word. Accepted risk: this is one of the 4 towns confirmed
+  // live (t.me/s/shahedchernihiv, "1 східніше Коропа") as a required case for
+  // this feature, and the source corpus is exclusively war-alert channels
+  // where "carp" essentially never appears.
+  { town: 'Короп', oblast: 'Chernihiv oblast', lat: 51.5671, lng: 32.9520, tokens: ['короп', 'korop'] },
+  { town: 'Сосниця', oblast: 'Chernihiv oblast', lat: 51.5223, lng: 32.5017, tokens: ['сосниц', 'sosnytsia'] },
+  { town: 'Куликівка', oblast: 'Chernihiv oblast', lat: 51.3726, lng: 31.6466, tokens: ['куликів', 'kulykivka'] },
+];
+
+// Fold RAION_CENTERS tokens into their parent oblast's OBLAST_REFS entry so a
+// message naming only a raion-center town (no oblast/city keyword) still
+// resolves an oblast via matchOblasts(). MUST run before OBLAST_MATCHERS is
+// compiled below — OBLAST_MATCHERS snapshots OBLAST_REFS.tokens at that point
+// in time; reversing the order means raion tokens silently never match.
+for (const r of RAION_CENTERS) {
+  const target = OBLAST_REFS.find((o) => o.oblast === r.oblast);
+  if (target) target.tokens.push(...r.tokens);
+}
+
+// Precompiled leading-boundary matchers per oblast (same technique as kab-threats).
+// Leading boundary: must not be preceded by a letter/digit.
+// Trailing letters are allowed because tokens are declension stems.
+export const OBLAST_MATCHERS = OBLAST_REFS.map((ref) => ({
+  ref,
+  regexes: ref.tokens.map(
+    (t) => new RegExp(`(?<![\\p{L}\\p{N}])${t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'iu'),
+  ),
+}));
+
+/**
+ * Returns which UA oblasts are mentioned in a message.
+ * Uses leading-boundary regexes compiled once at module load.
+ */
+export function matchOblasts(text: string): OblastRef[] {
+  return OBLAST_MATCHERS
+    .filter(({ regexes }) => regexes.some((re) => re.test(text)))
+    .map(({ ref }) => ref);
+}
 
 // ── Unified event types ──────────────────────────────────────────────────────
 
@@ -485,6 +772,17 @@ export const PLACE_COORDS: Record<string, [number, number]> = {
   'білогорівка': [47.91, 38.09], 'bilohorivka': [47.91, 38.09],
   'урожайне': [47.51, 36.98], 'urozhaine': [47.51, 36.98],
 };
+
+// Fold RAION_CENTERS into PLACE_COORDS so findBestPlace()/findAllNamedPlaces()
+// can pin the precise raion-town coordinate, not just the oblast centroid.
+// MUST run before COMPILED_PLACE_GAZETTEER is built below (it reads
+// PLACE_COORDS via Object.entries() at that exact point) — reversing the
+// order means raion towns silently never make it into the compiled gazetteer.
+// Raion towns get rank 2 (same as existing cities) — NOT added to
+// BROAD_PLACE_KEYS, so they never outrank a more specific match.
+for (const r of RAION_CENTERS) {
+  for (const tok of r.tokens) PLACE_COORDS[tok] = [r.lat, r.lng];
+}
 
 // Country / sea area centroids -- only used as a last resort.
 export const BROAD_PLACE_KEYS = new Set<string>([
