@@ -789,11 +789,14 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
         'icon-allow-overlap': true,
       }});
       // Selected-state overlay — same source, filtered (via setFilter in the
-      // click handler below) down to just the clicked feature's `fid`, drawn
+      // click handler below) down to just the clicked feature's `tid`, drawn
       // with the larger white-ringed "-selected" icon variant. Starts with a
-      // filter that matches nothing.
+      // filter that matches nothing. Uses `tid` (stable chain id across polls)
+      // rather than `fid` (a fresh per-response array index) so a moving
+      // drone's highlighted state survives a poll instead of silently
+      // dropping when the array order shifts.
       map.addLayer({ id: 'unified-threat-icons-selected', type: 'symbol', source: 'unified-threats',
-        filter: ['==', ['get', 'fid'], -1],
+        filter: ['==', ['get', 'tid'], ''],
         layout: {
           'icon-image': ['concat', THREAT_ICON_MATCH, '-selected'],
           'icon-size': ['interpolate', ['linear'], ['zoom'], 1, 0.6, 5, 0.85, 10, 1.1],
@@ -1690,14 +1693,18 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
 
     // ── Unified Threats — fpv / cruise / ballistic / kab / aviation / recon / uav ──
     // Selection state: clicking a feature filters the 'unified-threat-icons-selected'
-    // overlay layer down to that one feature's `fid` (see layer setup above for why
+    // overlay layer down to that one feature's `tid` (see layer setup above for why
     // this uses setFilter rather than feature-state — feature-state isn't valid in
-    // icon-image, a layout property, and silently no-ops there).
-    let selectedThreatFid: number | null = null;
+    // icon-image, a layout property, and silently no-ops there). `tid` is used
+    // instead of `fid` because `fid` is a fresh per-response array index —
+    // a moving drone keeps a stable `tid` across polls but its `fid` shifts,
+    // so fid-based selection would silently drop the highlight every poll for
+    // exactly the markers most likely to be actively watched (moving ones).
+    let selectedThreatTid: string | null = null;
     const clearThreatSelection = () => {
-      if (selectedThreatFid != null) {
-        map.setFilter('unified-threat-icons-selected', ['==', ['get', 'fid'], -1]);
-        selectedThreatFid = null;
+      if (selectedThreatTid != null) {
+        map.setFilter('unified-threat-icons-selected', ['==', ['get', 'tid'], '']);
+        selectedThreatTid = null;
       }
     };
     const onThreatClick = (e: maplibregl.MapLayerMouseEvent) => {
@@ -1706,9 +1713,9 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
       const p = f.properties as any;
       const coords = (f.geometry as any).coordinates;
 
-      const fid = Number(p.fid);
-      map.setFilter('unified-threat-icons-selected', ['==', ['get', 'fid'], fid]);
-      selectedThreatFid = fid;
+      const tid = String(p.tid ?? '');
+      map.setFilter('unified-threat-icons-selected', ['==', ['get', 'tid'], tid]);
+      selectedThreatTid = tid;
 
       const meta = THREAT_TYPE_META[p.ttype as string] ?? THREAT_TYPE_META.uav;
       const color = p.color || meta.color;
@@ -2861,10 +2868,11 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
           id: i,
           geometry: t.geometry,
           properties: {
+            fid: p.fid, tid: p.tid ?? '',
             ttype: p.ttype, title: p.title, place: p.place, oblast: p.oblast,
             confidence: p.confidence, band: p.band, bearing: p.bearing ?? null,
             approximate: !!p.approximate, sources: p.sources, ts: p.ts,
-            color: meta.color,
+            color: meta.color, trail: p.trail ?? null,
           },
         };
       }));

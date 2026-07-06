@@ -186,6 +186,26 @@ export function classifyDroneSubtype(text: string): 'FPV' | 'RECON' | 'UAV' {
   return 'UAV';
 }
 
+// ── distance computation ─────────────────────────────────────────────────────
+
+const EARTH_RADIUS_KM = 6371;
+
+/**
+ * Great-circle distance (km) between two lat/lng points (haversine).
+ * Shared by the same-oblast collapse guard (buildRoute) and chain-splitting
+ * (splitWaveIntoChains) — do not reimplement elsewhere in this module.
+ */
+export function haversineKm(lat1: number, lng1: number, lat2: number, lng2: number): number {
+  const toRad = (deg: number) => (deg * Math.PI) / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLng = toRad(lng2 - lng1);
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return EARTH_RADIUS_KM * c;
+}
+
 // ── bearing computation ──────────────────────────────────────────────────────
 
 /**
@@ -638,18 +658,39 @@ export function buildRoute(messages: TgMessage[], weaponType: WeaponType): Route
     if (!ref) { lastTs = msg.ts; continue; }
 
     const last = current[current.length - 1];
+    const place = findBestPlace(msg.text);
+
     if (last && last.oblast === ref.oblast) {
-      // Still count this channel even for a duplicate-oblast message
-      currentChannels.add(msg.channel);
-      lastTs = msg.ts;
-      continue;
+      // DRONE-only: don't collapse if the text resolves to a genuinely
+      // different, more-than-5km-distant place than the last waypoint —
+      // real drones move within an oblast and that movement should show up
+      // as separate waypoints (chains split on implied speed downstream).
+      // All other weapon types keep the original always-collapse behavior.
+      // Bounded against geocoding jitter: `place.name !== last.place` is
+      // required alongside the distance check, so two resolutions of the
+      // SAME place name (e.g. repeat mentions of one town) never split no
+      // matter how their centroids drift. A large oblast city named twice
+      // under two different resolved names (district vs city-center) could
+      // still split past 5km — treated as real intra-city movement, not
+      // jitter, since it requires an actual place-name change to trigger.
+      const movedFarEnough =
+        weaponType === 'DRONE' &&
+        place?.name &&
+        place.name !== last.place &&
+        haversineKm(last.lat, last.lng, place.coords[0], place.coords[1]) > 5;
+
+      if (!movedFarEnough) {
+        // Still count this channel even for a duplicate-oblast message
+        currentChannels.add(msg.channel);
+        lastTs = msg.ts;
+        continue;
+      }
     }
 
     // A city/village named in the text is more precise than the oblast
     // centroid — use it for the pin, but keep `oblast` (above) as the wave's
     // dedup identity so consecutive same-oblast messages still collapse into
     // one waypoint instead of the route jittering between every named town.
-    const place = findBestPlace(msg.text);
     current.push({
       lat:     place ? place.coords[0] : ref.coords[1],
       lng:     place ? place.coords[1] : ref.coords[0],
@@ -665,6 +706,56 @@ export function buildRoute(messages: TgMessage[], weaponType: WeaponType): Route
 
   flush();
   return waves;
+}
+
+// ── chain splitting (one continuously-tracked object per chain) ────────────
+
+export interface TrailPoint { lat: number; lng: number; ts: number; }
+
+/**
+ * Splits a wave's time-ordered waypoints into "chains" — contiguous runs
+ * where implied speed between consecutive waypoints stays under maxKmh.
+ * A wave is a whole night's activity across many oblasts; a chain
+ * approximates one continuously-tracked drone/missile.
+ *
+ * Defensive: re-sorts by ts in case callers pass unordered input. A dt of 0
+ * between distinct waypoints can't imply a finite speed, so it always starts
+ * a new chain rather than dividing by zero.
+ */
+export function splitWaveIntoChains(waypoints: RouteWaypoint[], maxKmh: number): RouteWaypoint[][] {
+  if (waypoints.length === 0) return [];
+
+  const sorted = [...waypoints].sort(
+    (a, b) => new Date(a.ts).getTime() - new Date(b.ts).getTime(),
+  );
+
+  const chains: RouteWaypoint[][] = [[sorted[0]]];
+
+  for (let i = 1; i < sorted.length; i++) {
+    const prev = sorted[i - 1];
+    const curr = sorted[i];
+    const dtMs = new Date(curr.ts).getTime() - new Date(prev.ts).getTime();
+
+    let startNewChain: boolean;
+    if (dtMs <= 0) {
+      // Zero (or negative/out-of-order) elapsed time can't imply a speed —
+      // treat as a new chain rather than divide by zero.
+      startNewChain = true;
+    } else {
+      const distKm = haversineKm(prev.lat, prev.lng, curr.lat, curr.lng);
+      const dtHours = dtMs / 3_600_000;
+      const impliedKmh = distKm / dtHours;
+      startNewChain = impliedKmh > maxKmh;
+    }
+
+    if (startNewChain) {
+      chains.push([curr]);
+    } else {
+      chains[chains.length - 1].push(curr);
+    }
+  }
+
+  return chains;
 }
 
 // ── UAV count extraction ─────────────────────────────────────────────────────

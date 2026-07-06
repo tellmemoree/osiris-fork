@@ -1,6 +1,14 @@
 import { NextResponse } from 'next/server';
-import { confidenceBand } from '@/lib/telegram-threats';
+import { confidenceBand, splitWaveIntoChains } from '@/lib/telegram-threats';
+import type { TrailPoint } from '@/lib/telegram-threats';
 import { raionKeyForPoint } from '@/lib/raion-lookup';
+
+// Max real-world drone speed (km/h) used to split a wave's waypoints into
+// per-object chains — see splitWaveIntoChains in telegram-threats.ts.
+const DRONE_CHAIN_MAX_KMH = 250;
+
+// Trail length cap — most-recent N points kept per chain, oldest-to-newest.
+const TRAIL_MAX_POINTS = 8;
 
 export const dynamic = 'force-dynamic';
 
@@ -41,6 +49,7 @@ export type UnifiedThreatType =
 
 export interface UnifiedThreatProperties {
   fid?:        number; // stable per-response index, stamped post-hoc — map click-to-select keys off this (GeoJSON sources here have no generateId)
+  tid:         string; // stable track/chain id across polls — identity independent of array position
   ttype:       UnifiedThreatType;
   title:       string;
   place?:      string;
@@ -53,6 +62,7 @@ export interface UnifiedThreatProperties {
   ts:          string;
   alarmConfirmed?:  boolean; // drone/missile waypoint corroborated by alarm-history (source route's own check)
   neptunConfirmed?: boolean; // point resolves into a raion currently active in /api/neptun-alerts
+  trail?:      TrailPoint[]; // oldest-to-newest, capped at TRAIL_MAX_POINTS; last entry == this feature's geometry coords
 }
 
 export interface UnifiedThreatFeature {
@@ -257,13 +267,15 @@ async function computeUnifiedThreats(): Promise<UnifiedThreatsResponse> {
       // semantics — NOT raw mention count (t.count counts repeat posts from
       // the same channel, which would misrepresent corroboration strength).
       const confidence = Array.isArray(t.sources) ? t.sources.length : 0;
+      const place = typeof t.place === 'string' ? t.place : undefined;
       features.push({
         type: 'Feature',
         geometry: { type: 'Point', coordinates: [t.lng, t.lat] },
         properties: {
+          tid: `kab|${place ?? oblast}`,
           ttype: 'kab',
           title: TITLES.kab,
-          place: typeof t.place === 'string' ? t.place : undefined,
+          place,
           oblast,
           confidence,
           band: confidenceBand(confidence),
@@ -277,31 +289,81 @@ async function computeUnifiedThreats(): Promise<UnifiedThreatsResponse> {
   }
 
   // -------------------------------------------------------------------------
-  // Drone-threats waypoints — split fpv / recon / uav via `subtype`
+  // Drone-threats waypoints — grouped into per-object chains (splitWaveIntoChains)
+  // so a tracked UAV relocates across polls instead of leaving N disconnected
+  // static markers. Each chain -> exactly ONE feature, positioned at the
+  // chain's most recent waypoint, carrying a `trail` of its recent history.
   // -------------------------------------------------------------------------
   if (droneData?.waves && Array.isArray(droneData.waves)) {
     for (const wave of droneData.waves) {
       if (!Array.isArray(wave.waypoints)) continue;
-      for (const wp of wave.waypoints) {
-        if (typeof wp.lat !== 'number' || typeof wp.lng !== 'number' || !isFinite(wp.lat) || !isFinite(wp.lng)) continue;
+
+      // splitWaveIntoChains requires RouteWaypoint's non-optional `text`;
+      // DroneWaypoint (this route's narrowed upstream shape) has no `text`
+      // field, so stub it in — chain-splitting never reads `text`.
+      const validWaypoints = wave.waypoints.filter(
+        (wp): wp is DroneWaypoint & { lat: number; lng: number; oblast: string; ts: string; channel: string } =>
+          typeof wp.lat === 'number' && isFinite(wp.lat) &&
+          typeof wp.lng === 'number' && isFinite(wp.lng) &&
+          typeof wp.oblast === 'string' &&
+          typeof wp.ts === 'string' &&
+          typeof wp.channel === 'string',
+      );
+      if (validWaypoints.length === 0) continue;
+
+      const routeWaypoints = validWaypoints.map((wp) => ({ ...wp, text: '' }));
+      const chains = splitWaveIntoChains(routeWaypoints, DRONE_CHAIN_MAX_KMH);
+
+      for (const chain of chains) {
+        if (chain.length === 0) continue;
+        const last = chain[chain.length - 1];
+        const first = chain[0];
+
         const ttype: UnifiedThreatType =
-          wp.subtype === 'FPV' ? 'fpv' : wp.subtype === 'RECON' ? 'recon' : 'uav';
-        const confidence = typeof wp.confidence === 'number' ? wp.confidence : 0;
+          last.subtype === 'FPV' ? 'fpv' : last.subtype === 'RECON' ? 'recon' : 'uav';
+        const confidence = typeof last.confidence === 'number' ? last.confidence : 0;
+
+        const trailSlice = chain.length > TRAIL_MAX_POINTS
+          ? chain.slice(chain.length - TRAIL_MAX_POINTS)
+          : chain;
+        const trail: TrailPoint[] = trailSlice.map((wp) => ({
+          lat: wp.lat,
+          lng: wp.lng,
+          ts: new Date(wp.ts).getTime(),
+        }));
+
         features.push({
           type: 'Feature',
-          geometry: { type: 'Point', coordinates: [wp.lng, wp.lat] },
+          geometry: { type: 'Point', coordinates: [last.lng, last.lat] },
           properties: {
+            // Keyed off the chain's first waypoint so a moving drone keeps the
+            // same tid across polls that still see that waypoint. Coordinates
+            // rounded to ~100m added to cut collisions between two distinct
+            // chains that start in the same oblast within the same minute
+            // (Telegram timestamps are minute-grained) — without this, both
+            // chains would share one tid and click-selection would highlight
+            // whichever one MapLibre happened to draw last.
+            // Known limitation, accepted for this stateless-per-poll-rebuild
+            // model (no persisted track store): if the chain's first waypoint
+            // ages out of the rolling window, or a later-arriving waypoint
+            // shifts where the 250km/h split falls, the "first" waypoint
+            // changes and tid changes with it — the marker keeps moving
+            // correctly, only its selection-highlight can occasionally reset.
+            // Fixing that fully needs a persisted track store matching new
+            // chains to prior ones by proximity+heading; out of scope here.
+            tid: `${ttype}:${new Date(first.ts).getTime()}:${first.oblast}:${first.lat.toFixed(3)},${first.lng.toFixed(3)}`,
             ttype,
             title: TITLES[ttype],
-            place: wp.place,
-            oblast: typeof wp.oblast === 'string' ? wp.oblast : 'Unknown',
+            place: last.place,
+            oblast: last.oblast,
             confidence,
             band: confidenceBand(confidence),
-            bearing: typeof wp.bearing === 'number' ? wp.bearing : null,
-            approximate: !wp.place, // no named place resolved -> oblast-centroid fallback
+            bearing: typeof last.bearing === 'number' ? last.bearing : null,
+            approximate: !last.place, // no named place resolved -> oblast-centroid fallback
             sources: confidence,   // confidence IS the distinct-channel count for waypoints
-            ts: typeof wp.ts === 'string' ? wp.ts : new Date().toISOString(),
-            alarmConfirmed: wp.alarmConfirmed === true,
+            ts: last.ts,
+            alarmConfirmed: last.alarmConfirmed === true,
+            trail,
           },
         });
       }
@@ -326,14 +388,16 @@ async function computeUnifiedThreats(): Promise<UnifiedThreatsResponse> {
         for (const wp of wave.waypoints) {
           if (typeof wp.lat !== 'number' || typeof wp.lng !== 'number' || !isFinite(wp.lat) || !isFinite(wp.lng)) continue;
           const confidence = typeof wp.confidence === 'number' ? wp.confidence : 0;
+          const oblast = typeof wp.oblast === 'string' ? wp.oblast : 'Unknown';
           features.push({
             type: 'Feature',
             geometry: { type: 'Point', coordinates: [wp.lng, wp.lat] },
             properties: {
+              tid: `${ttype}|${wp.place ?? oblast}`,
               ttype,
               title: TITLES[ttype],
               place: wp.place,
-              oblast: typeof wp.oblast === 'string' ? wp.oblast : 'Unknown',
+              oblast,
               confidence,
               band: confidenceBand(confidence),
               bearing: null, // missile-threats waypoints carry no bearing field today
@@ -357,14 +421,16 @@ async function computeUnifiedThreats(): Promise<UnifiedThreatsResponse> {
       // Confidence = distinct reporting channels (see KAB block above for why
       // raw mention count is the wrong metric here).
       const confidence = Array.isArray(d.sources) ? d.sources.length : 0;
+      const oblast = typeof d.locationName === 'string' ? d.locationName : 'Unknown';
       features.push({
         type: 'Feature',
         geometry: { type: 'Point', coordinates: [d.lng, d.lat] },
         properties: {
+          tid: `aviation|${oblast}`,
           ttype: 'aviation',
           title: TITLES.aviation,
           place: d.locationName,
-          oblast: typeof d.locationName === 'string' ? d.locationName : 'Unknown',
+          oblast,
           confidence,
           band: confidenceBand(confidence),
           bearing: null, // no bearing signal for MiG-31K sightings
@@ -384,15 +450,25 @@ async function computeUnifiedThreats(): Promise<UnifiedThreatsResponse> {
   // current. Keep only the most recent feature per (ttype, place-or-oblast)
   // so the map reflects current state; full history still lives in each
   // route's own *-tracks.json for the timeline and other consumers.
+  //
+  // fpv/recon/uav are EXCLUDED from this dedup: they're already one-feature-
+  // per-chain (see splitWaveIntoChains above), so collapsing further by
+  // place-or-oblast would re-merge two genuinely different tracked objects
+  // that happen to currently sit in the same place — defeating the point of
+  // chain-grouping.
+  const DRONE_FAMILY_TTYPES = new Set<UnifiedThreatType>(['fpv', 'recon', 'uav']);
+  const droneFamilyFeatures = features.filter((f) => DRONE_FAMILY_TTYPES.has(f.properties.ttype));
+  const dedupCandidates = features.filter((f) => !DRONE_FAMILY_TTYPES.has(f.properties.ttype));
+
   const latestByKey = new Map<string, UnifiedThreatFeature>();
-  for (const f of features) {
+  for (const f of dedupCandidates) {
     const key = `${f.properties.ttype}|${f.properties.place ?? f.properties.oblast}`;
     const existing = latestByKey.get(key);
     if (!existing || new Date(f.properties.ts).getTime() > new Date(existing.properties.ts).getTime()) {
       latestByKey.set(key, f);
     }
   }
-  const deduped = Array.from(latestByKey.values());
+  const deduped = [...droneFamilyFeatures, ...Array.from(latestByKey.values())];
 
   // -------------------------------------------------------------------------
   // Live-alarm corroboration filter — parity with neptun.in.ua, which only
