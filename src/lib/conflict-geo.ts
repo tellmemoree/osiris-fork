@@ -848,24 +848,6 @@ export function findPlaceCoords(text: string): [number, number] | null {
   return findBestPlace(text)?.coords ?? null;
 }
 
-/**
- * Same resolution as findPlaceCoords() but also returns the matched place's
- * name/keyword — for callers that need to display or compare the place, not
- * just its coordinates (e.g. picking a pin location and its label together).
- */
-export function findBestPlace(text: string): { coords: [number, number]; name: string } | null {
-  const lower = text.toLowerCase();
-  let best: { coords: [number, number]; name: string; rank: number; pos: number } | null = null;
-  for (const { re, coords, rank, keyword } of COMPILED_PLACE_GAZETTEER) {
-    const m = re.exec(lower);
-    if (!m) continue;
-    const pos = m.index;
-    if (!best || rank > best.rank || (rank === best.rank && pos < best.pos)) {
-      best = { coords, name: keyword, rank, pos };
-    }
-  }
-  return best ? { coords: best.coords, name: best.name } : null;
-}
 
 /**
  * Returns every distinct specific place named in text (rank=2 city/town matches only;
