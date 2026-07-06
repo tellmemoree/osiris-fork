@@ -39,6 +39,8 @@ export interface TrackEntry {
   text:           string;
   alarmConfirmed: boolean;
   neptunConfirmed?: boolean; // Neptune.in.ua raion corroboration (drone routes only)
+  subtype?:       'FPV' | 'RECON' | 'UAV'; // DRONE-only sub-classification
+  bearing?:       number | null;            // DRONE-only great-circle bearing toward target place
   fingerprint?:   string;  // optional — old on-disk entries lack it
 }
 
@@ -135,6 +137,20 @@ export async function mergeAndSaveTracks(
       // never pick up the richer data even when the same message is rescraped.
       stored.place = entry.place;
       stored.neptunConfirmed = entry.neptunConfirmed;
+      stored.subtype = entry.subtype;
+      stored.bearing = entry.bearing;
+    } else if (stored.subtype === undefined && entry.subtype !== undefined) {
+      // Same bug class as place/neptunConfirmed above (see 0209f32, 5228265):
+      // a rescraped duplicate of an entry stored before subtype/bearing existed
+      // must not silently keep the field missing forever. Backfill independently
+      // of the `place` branch above since subtype can be new even when place
+      // was already present on the stored entry.
+      stored.subtype = entry.subtype;
+      stored.bearing = entry.bearing;
+    } else if (stored.neptunConfirmed === undefined && entry.neptunConfirmed !== undefined) {
+      // Same bug class — a rescraped duplicate stored before neptunConfirmed
+      // existed must not silently keep it missing forever either.
+      stored.neptunConfirmed = entry.neptunConfirmed;
     }
   }
 
@@ -208,6 +224,8 @@ export function buildWavesFromEntries(entries: TrackEntry[]): RouteWave[] {
       channel:        entry.channel,
       alarmConfirmed: entry.alarmConfirmed,
       neptunConfirmed: entry.neptunConfirmed,
+      subtype:        entry.subtype,
+      bearing:        entry.bearing,
       confidence:     undefined, // stamped by flush() after full wave is known
     });
     lastTs = entry.ts;
@@ -238,6 +256,8 @@ export function wavesToTrackEntries(
         text:           wp.text,
         alarmConfirmed: !!wp.alarmConfirmed,
         neptunConfirmed: wp.neptunConfirmed,
+        subtype:        wp.subtype,
+        bearing:        wp.bearing,
         fingerprint:    msgFingerprint(wp.text, ts),
       };
     }),

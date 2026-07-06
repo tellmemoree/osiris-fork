@@ -4,7 +4,7 @@ import { Play, Pause } from 'lucide-react';
 
 export interface TimelineEvent {
   t: number;   // Unix ms
-  type: 'news' | 'kab' | 'gdelt' | 'thermal' | 'capture' | 'air_raid' | 'ru_air_raid' | 'drone' | 'missile' | 'mig31k' | 'railway' | 'correlated';
+  type: 'news' | 'kab' | 'gdelt' | 'thermal' | 'capture' | 'air_raid' | 'ru_air_raid' | 'drone' | 'missile' | 'mig31k' | 'railway' | 'correlated' | 'fpv' | 'cruise' | 'ballistic' | 'aviation' | 'recon' | 'uav';
 }
 
 interface Props {
@@ -36,6 +36,12 @@ const TYPE_COLOR: Record<TimelineEvent['type'], string> = {
   mig31k:      'rgba(255,171,0,0.40)',
   railway:     'rgba(255,87,34,0.40)',
   correlated:  'rgba(255,109,0,0.40)',
+  fpv:         'rgba(244,67,54,0.40)',
+  cruise:      'rgba(255,87,34,0.40)',
+  ballistic:   'rgba(255,152,0,0.40)',
+  aviation:    'rgba(255,171,0,0.40)',
+  recon:       'rgba(156,39,176,0.40)',
+  uav:         'rgba(206,147,216,0.40)',
 };
 
 function fmtUtc(ms: number): string {
@@ -83,6 +89,12 @@ export default function TimelineControl({ replayTime, timelineRangeH, events, on
     mig31k:     new Array(BUCKETS).fill(0),
     railway:    new Array(BUCKETS).fill(0),
     correlated: new Array(BUCKETS).fill(0),
+    fpv:        new Array(BUCKETS).fill(0),
+    cruise:     new Array(BUCKETS).fill(0),
+    ballistic:  new Array(BUCKETS).fill(0),
+    aviation:   new Array(BUCKETS).fill(0),
+    recon:      new Array(BUCKETS).fill(0),
+    uav:        new Array(BUCKETS).fill(0),
   };
   for (const ev of events) {
     const idx = Math.floor((ev.t - rangeStart) / bucketMs);

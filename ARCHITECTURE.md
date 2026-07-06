@@ -122,6 +122,37 @@ page.tsx (useEffect)
   └─ Exports: Signal, CorrelatedEvent, CorrelatedEventsResponse (panel imports these)
 ```
 
+### Unified Threat Layer Aggregator
+
+```
+/api/threats                                 ← Merges kab/drone/missile/mig31k into one 7-way taxonomy
+  ├─ Self-fetches: /api/kab-threats, /api/drone-threats, /api/missile-threats,
+  │               /api/mig31k, /api/neptun-alerts, /api/air-raids
+  ├─ Promise.allSettled + AbortSignal.timeout(8000) per source (failed source → skipped)
+  ├─ Dedupe by (ttype, place-or-oblast), keep latest ts per key
+  ├─ Live-alarm corroboration filter (parity with neptun.in.ua, which only shows
+  │   currently-active threats, not every mention in each source's rolling window):
+  │     neptunConfirmed = raionKeyForPoint(lat,lng) resolves into an active
+  │                       /api/neptun-alerts key (src/lib/raion-lookup.ts —
+  │                       point-in-polygon over public/raions.geojson; reused
+  │                       from the still-separate, unmerged fix/drone-alarm-filter
+  │                       branch line)
+  │     oblastAlarmed   = feature's oblast is in the active /api/air-raids set
+  │     alarmConfirmed  = passed through from drone-threats/missile-threats,
+  │                       which already stamp it via their own alarm-history check
+  │     keep feature iff oblastAlarmed || neptunConfirmed || alarmConfirmed
+  │     aviation (mig31k) bypasses this filter entirely — locationName is often
+  │       an RU airfield, oblast/raion matching structurally doesn't apply
+  │     fail-open: if BOTH /api/neptun-alerts AND /api/air-raids are unusable
+  │       (rejected/non-ok/malformed/stale-empty) at the same time, skip the
+  │       filter and return deduped features unchanged — never blank the layer
+  │       on a double-outage (see commit 9bb93cc for the empty-Set-is-truthy
+  │       bug class this guards against)
+  ├─ 60s module-level cache + inflight-coalescence; stale-on-error fallback
+  ├─ Env: OSIRIS_SELF_ORIGIN (default http://127.0.0.1:3000)
+  └─ Exports: UnifiedThreatType, UnifiedThreatProperties, UnifiedThreatsResponse
+```
+
 ### Conflict Event Aggregator
 
 ```
@@ -185,6 +216,40 @@ Env vars required for full enrichment: SHODAN_API_KEY (in osiris container .env)
   ├─ telegram-threats.ts: buildRoute() for temporal waves
   ├─ Alarm cross-ref (air-raid-history.json)
   └─ Route polylines + alarm-confirmed rings
+
+Oblast/raion attribution (2026-07, feat/raion-gazetteer)
+  ├─ Single source of truth: src/lib/conflict-geo.ts
+  │     OBLAST_REFS, RAION_CENTERS, OBLAST_MATCHERS, matchOblasts()
+  │     — consolidated here from telegram-threats.ts + kab-threats/route.ts,
+  │       which each kept an independent (and drifting) copy before this
+  ├─ RAION_CENTERS: 140 entries total — 126 mainland raion-capital towns +
+  │     10 Crimea (coords via Wikidata P36) + 4 named hromada-center
+  │     exceptions (Baturyn, Korop, Sosnytsia, Kulykivka — sub-raion towns
+  │     that specialized monitor channels name directly; NOT full
+  │     hromada-level, that's ~1,470 and out of scope). Crimea rows feed
+  │     PLACE_COORDS pinning only — no matching OBLAST_REFS entry to merge
+  │     tokens into.
+  ├─ A few tokens are deliberately Latin-only or omitted where the Cyrillic
+  │     form collides with a common word (see inline comments per entry) —
+  │     e.g. 'сама' (Самар)/'коси' (Косів)/'сарна' (Сарни); 'Щастя' and
+  │     'Короп' are full homographs of common nouns and can't be fixed by
+  │     lengthening — Short accepted-risk on Короп since it's one of the 4
+  │     required test towns.
+  ├─ Module load order matters: RAION_CENTERS tokens are folded into
+  │     OBLAST_REFS[].tokens AND into PLACE_COORDS, both BEFORE their
+  │     respective consumers (OBLAST_MATCHERS, COMPILED_PLACE_GAZETTEER) are
+  │     compiled — reversing either merge loop means raion tokens silently
+  │     never match (same footgun class as the place/subtype/bearing
+  │     field-threading bug in threat-tracks.ts)
+  ├─ telegram-threats.ts re-exports matchOblasts/OblastRef/OBLAST_REFS/
+  │     OBLAST_MATCHERS so drone-threats/weapon-threats/mig31k/
+  │     strategic-thermal/railway-incidents import unchanged
+  ├─ kab-threats/route.ts now imports matchOblasts from conflict-geo.ts
+  │     directly (its previously-independent, less-complete OBLAST_REFS list
+  │     — missing all western oblasts — is gone; upgraded to the shared list)
+  └─ ru-air-raids/route.ts keeps its own separate RU_OBLAST_REFS/matchOblasts
+        (different domain — Russian oblasts, not Ukrainian — intentionally
+        not consolidated)
 
 /api/neptun-alerts
   ├─ neptun.in.ua/api/v1/alerts (Cloudflare-protected → stealthFetch)

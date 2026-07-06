@@ -10,9 +10,6 @@ import type { FeatureCollection } from 'geojson';
 export const dynamic = 'force-dynamic';
 
 // Cache TTL: 30 minutes — frontlines update at most a few times per day.
-const SNAPSHOTS_DIR = path.join(process.env.HOME ?? '/root', '.osiris-data', 'frontline-snapshots');
-const SNAPSHOT_MAX_AGE_DAYS = 35;
-
 let staleCache: { frontlines: GeoJSONFeatureCollection; timestamp: string } | null = null;
 
 // Militaryland (militaryland.net/ua/front-line/geojson) returns 404 — endpoint is dead.
@@ -134,7 +131,7 @@ export async function GET(req: Request) {
     console.error('Frontlines fetch error (DeepState):', reason);
     if (staleCache) {
       return NextResponse.json(
-        { ...staleCache, sources: ['DeepState'], stale: true, delta_frontlines: null },
+        { ...staleCache, sources: ['DeepState'], stale: true },
         { headers: { 'Cache-Control': 'no-store', 'X-Stale': 'true' } }
       );
     }

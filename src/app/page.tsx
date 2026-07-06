@@ -118,15 +118,18 @@ function getYouTubeWatchUrl(url: string): string {
 }
 
 const TIMELINE_TYPE_TO_LAYER: Record<string, string> = {
-  kab:         'kab_threats',
+  fpv:         'unified_threats',
+  cruise:      'unified_threats',
+  ballistic:   'unified_threats',
+  kab:         'unified_threats',
+  aviation:    'unified_threats',
+  recon:       'unified_threats',
+  uav:         'unified_threats',
   thermal:     'thermal_aoi',
   capture:     'captures',
   gdelt:       'global_incidents',
   air_raid:    'air_raids',
   ru_air_raid: 'ru_air_raids',
-  drone:       'drone_threats',
-  missile:     'missile_threats',
-  mig31k:      'mig31k',
   railway:     'railway_incidents',
   correlated:  'correlated_events',
 };
@@ -149,7 +152,12 @@ export default function Dashboard() {
     const evs: TimelineEvent[] = [];
     const push = (t: number, type: TimelineEvent['type']) => { if (Number.isFinite(t)) evs.push({ t, type }); };
     (data.news        || []).forEach((n: any) => n.published  && push(new Date(n.published).getTime(),  'news'));
-    (data.kab_threats || []).forEach((k: any) => k.startedAt  && push(new Date(k.startedAt).getTime(), 'kab'));
+    // Unified threats bucket by ttype ('fpv'|'cruise'|'ballistic'|'kab'|'aviation'|'recon'|'uav');
+    // unrecognised ttype values are skipped rather than mis-bucketed.
+    (data.threats     || []).forEach((t: any) => {
+      const p = t.properties ?? t;
+      if (p.ts && p.ttype && p.ttype in TIMELINE_TYPE_TO_LAYER) push(new Date(p.ts).getTime(), p.ttype as TimelineEvent['type']);
+    });
     (data.gdelt       || []).forEach((e: any) => e.published  && push(new Date(e.published).getTime(),  'gdelt'));
     (data.thermal_aoi || []).forEach((a: any) => { const ms = parseThermalLatest(a.latest); if (ms) push(ms, 'thermal'); });
     (data.captures    || []).forEach((c: any) => c.date       && push(new Date(c.date).getTime(),       'capture'));
@@ -256,9 +264,7 @@ export default function Dashboard() {
     sdk_ransomware: false,
     air_raids: false,
     power_outages: false,
-    kab_threats: false,
-    drone_threats: false,
-    missile_threats: false,
+    unified_threats: false,
     alarm_vectors: false,
     missile_cruise:     true,
     missile_ballistic:  true,
@@ -274,10 +280,9 @@ export default function Dashboard() {
     internet_outages: false,
     malware: false,
     oblast_pressure: false,
-    mig31k: false,
-    correlated_events: false,
     railway_network: false,
     railway_incidents: false,
+    correlated_events: false,
   });
   // Persist active layer toggles across restarts — read on mount, write on every change.
   // Skip the first write (count=1, initial defaults) so we don't overwrite saved state
@@ -581,13 +586,13 @@ export default function Dashboard() {
     gdelt: () => fetchEndpoint('/api/conflict-events', d => ({ gdelt: d.events })),
     air_raids: () => fetchEndpoint('/api/air-raids', d => ({ air_raids: d.alerts })).then(() => setLayerTimestamps(p => ({ ...p, air_raids: Date.now() }))),
     power_outages: () => fetchEndpoint('/api/power-outages', d => ({ power_outages: d.outages })),
-    kab_threats: () => fetchEndpoint('/api/kab-threats', d => ({ kab_threats: d.threats })).then(() => setLayerTimestamps(p => ({ ...p, kab_threats: Date.now() }))),
     weapon_threats: () => fetchEndpoint('/api/weapon-threats', d => ({ weapon_threats: d.threats })).then(() => setLayerTimestamps(p => ({ ...p, weapon_threats: Date.now() }))),
-    drone_threats: () => fetchEndpoint('/api/drone-threats', d => ({ drone_threats: d.threats, drone_waves: d.waves, drone_uav_count: d.uav_count ?? 0, alarm_vectors: d.alarm_vectors ?? [] })).then(() => setLayerTimestamps(p => ({ ...p, drone_threats: Date.now() }))),
-    missile_threats: () => fetchEndpoint('/api/missile-threats', d => ({ missile_routes: d.routes, missile_alarm_vectors: d.alarm_vectors })).then(() => setLayerTimestamps(p => ({ ...p, missile_threats: Date.now() }))),
+    unified_threats: () => fetchEndpoint('/api/threats', d => ({ threats: d.features?.features ?? [], alarm_vectors: d.alarm_vectors ?? [], drone_uav_count: d.uav_count ?? 0 })).then(() => setLayerTimestamps(p => ({ ...p, unified_threats: Date.now() }))),
     ru_air_raids: () => fetchEndpoint('/api/ru-air-raids', d => ({ ru_air_raids: d.events })),
     frontlines: () => {
-      fetchEndpoint('/api/frontlines', d => ({ frontlines: (d as any).frontlines?.features || [] })).then(() => setLayerTimestamps(p => ({ ...p, frontlines: Date.now() })));
+      // Fetch current frontline overlay
+      fetchEndpoint('/api/frontlines', d => ({ frontlines: d.frontlines?.features || [] })).then(() => setLayerTimestamps(p => ({ ...p, frontlines: Date.now() })));
+      // Fetch directional 7-day delta (RU gain / UA gain)
       fetchEndpoint('/api/frontlines?delta=7', d => ({
         frontline_ru_gain: (d as any).ru_gain?.features || [],
         frontline_ua_gain: (d as any).ua_gain?.features || [],
@@ -601,7 +606,6 @@ export default function Dashboard() {
     malware: () => fetchEndpoint('/api/malware', d => ({ malware_threats: d.threats })),
     oblast_pressure: () => fetchEndpoint('/api/oblast-pressure', (d: any) => ({ oblast_pressure: d.oblasts ?? [] })),
     shadow_fleet_tracks: () => fetchEndpoint('/api/maritime?tracks=1', (d: any) => ({ shadow_fleet_tracks: d.tracks ?? [] })),
-    mig31k: () => fetchEndpoint('/api/mig31k', d => ({ mig31k: { detections: d.detections ?? [], updatedAt: d.timestamp } })).then(() => setLayerTimestamps(p => ({ ...p, mig31k: Date.now() }))),
     railway_incidents: () => fetchEndpoint('/api/railway-incidents', d => ({ railway_incidents_geo: d.features || [] })),
     correlated_events: () => fetchEndpoint('/api/correlated-events', d => ({ correlated_events: d.events ?? [] })).then(() => setLayerTimestamps(p => ({ ...p, correlated_events: Date.now() }))),
   }), [fetchEndpoint]);
@@ -616,7 +620,7 @@ export default function Dashboard() {
   // Pull every searchable entity source once so the search bar can locate any
   // entity by name even while its layer is hidden. Called when search is opened.
   const ensureSearchSources = useCallback(() => {
-    ['flights', 'satellites', 'cctv', 'maritime', 'radiation', 'live_news', 'weather', 'infrastructure', 'gdelt', 'kab_threats', 'power_outages'].forEach(loadOnce);
+    ['flights', 'satellites', 'cctv', 'maritime', 'radiation', 'live_news', 'weather', 'infrastructure', 'gdelt', 'unified_threats', 'power_outages'].forEach(loadOnce);
   }, [loadOnce]);
 
   // Background pre-fetch: populate LayerPanel counts for every layer regardless
@@ -625,14 +629,14 @@ export default function Dashboard() {
   // loadOnce() skips keys already fetched by active layers.
   useEffect(() => {
     const t1 = setTimeout(() => {
-      ['flights', 'air_raids', 'kab_threats', 'power_outages', 'frontlines', 'captures', 'mig31k'].forEach(loadOnce);
+      ['flights', 'air_raids', 'unified_threats', 'power_outages', 'frontlines', 'captures'].forEach(loadOnce);
     }, 1000);
     const t2 = setTimeout(() => {
       ['thermal_aoi', 'satellites', 'fires', 'weather', 'infrastructure', 'gdelt', 'radiation'].forEach(loadOnce);
     }, 4000);
     const t3 = setTimeout(() => {
       ['maritime', 'live_news', 'cctv', 'air_quality', 'internet_outages', 'malware',
-       'weapon_threats', 'drone_threats', 'missile_threats', 'ru_air_raids'].forEach(loadOnce);
+       'weapon_threats', 'ru_air_raids'].forEach(loadOnce);
     }, 8000);
     return () => { clearTimeout(t1); clearTimeout(t2); clearTimeout(t3); };
   }, [loadOnce]);
@@ -660,10 +664,8 @@ export default function Dashboard() {
     if (activeLayers.global_incidents) loadOnce('gdelt');
     if (activeLayers.air_raids) loadOnce('air_raids');
     if (activeLayers.power_outages) loadOnce('power_outages');
-    if (activeLayers.kab_threats) loadOnce('kab_threats');
     if (activeLayers.air_raids) loadOnce('weapon_threats'); // enriches air-raid popups
-    if (activeLayers.drone_threats || activeLayers.alarm_vectors) loadOnce('drone_threats');
-    if (activeLayers.missile_threats) loadOnce('missile_threats');
+    if (activeLayers.unified_threats || activeLayers.alarm_vectors) loadOnce('unified_threats');
     if (activeLayers.ru_air_raids) loadOnce('ru_air_raids');
     if (activeLayers.frontlines) loadOnce('frontlines');
     if (activeLayers.captures) loadOnce('captures');
@@ -673,7 +675,6 @@ export default function Dashboard() {
     if (activeLayers.malware) loadOnce('malware');
     if (activeLayers.oblast_pressure) loadOnce('oblast_pressure');
     if (activeLayers.shadow_fleet_tracks) loadOnce('shadow_fleet_tracks');
-    if (activeLayers.mig31k) loadOnce('mig31k');
     if ((activeLayers as any).railway_incidents) loadOnce('railway_incidents');
     if (activeLayers.correlated_events) loadOnce('correlated_events');
   }, [activeLayers, loadOnce]);
@@ -683,12 +684,12 @@ export default function Dashboard() {
   // mount (after priority-1 loads settle). loadOnce() skips keys already fetched.
   useEffect(() => {
     const t = setTimeout(() => {
-      ['flights', 'air_raids', 'kab_threats', 'power_outages',
+      ['flights', 'air_raids', 'unified_threats', 'power_outages',
        'frontlines', 'captures', 'thermal_aoi', 'satellites',
        'fires', 'weather', 'infrastructure', 'gdelt',
        'maritime', 'radiation', 'live_news', 'cctv',
        'air_quality', 'internet_outages', 'malware',
-       'weapon_threats', 'drone_threats', 'missile_threats', 'ru_air_raids', 'mig31k'].forEach(loadOnce);
+       'weapon_threats', 'ru_air_raids'].forEach(loadOnce);
     }, 3000);
     return () => clearTimeout(t);
   }, [loadOnce]);
@@ -731,20 +732,14 @@ export default function Dashboard() {
     if (activeLayers.air_raids) {
       intervals.push(setInterval(() => fetchEndpoint('/api/air-raids', d => ({ air_raids: d.alerts })).then(() => setLayerTimestamps(p => ({ ...p, air_raids: Date.now() }))), 60000)); // 1 min
     }
-    if (activeLayers.kab_threats) {
-      intervals.push(setInterval(() => fetchEndpoint('/api/kab-threats', d => ({ kab_threats: d.threats })).then(() => setLayerTimestamps(p => ({ ...p, kab_threats: Date.now() }))), 60000)); // 1 min
-    }
-    if (activeLayers.drone_threats || activeLayers.alarm_vectors) {
-      intervals.push(setInterval(() => fetchEndpoint('/api/drone-threats', d => ({ drone_threats: d.threats, drone_waves: d.waves, drone_uav_count: d.uav_count ?? 0, alarm_vectors: d.alarm_vectors ?? [] })).then(() => setLayerTimestamps(p => ({ ...p, drone_threats: Date.now() }))), 60000)); // 1 min — "last 1.5h" data
-    }
-    if (activeLayers.missile_threats) {
-      intervals.push(setInterval(() => fetchEndpoint('/api/missile-threats', d => ({ missile_routes: d.routes, missile_alarm_vectors: d.alarm_vectors })).then(() => setLayerTimestamps(p => ({ ...p, missile_threats: Date.now() }))), 60000)); // 1 min — "last 1.5h" data
+    if (activeLayers.unified_threats || activeLayers.alarm_vectors) {
+      intervals.push(setInterval(() => fetchEndpoint('/api/threats', d => ({ threats: d.features?.features ?? [], alarm_vectors: d.alarm_vectors ?? [], drone_uav_count: d.uav_count ?? 0 })).then(() => setLayerTimestamps(p => ({ ...p, unified_threats: Date.now() }))), 60000)); // 1 min — "last 1.5h" data
     }
     if (activeLayers.power_outages) {
       intervals.push(setInterval(() => fetchEndpoint('/api/power-outages', d => ({ power_outages: d.outages })), 300000)); // 5 min
     }
     if (activeLayers.frontlines) {
-      intervals.push(setInterval(() => fetchEndpoint('/api/frontlines', d => ({ frontlines: (d as any).frontlines?.features || [] })).then(() => setLayerTimestamps(p => ({ ...p, frontlines: Date.now() }))), 1800000)); // 30 min
+      intervals.push(setInterval(() => fetchEndpoint('/api/frontlines', d => ({ frontlines: d.frontlines?.features || [] })).then(() => setLayerTimestamps(p => ({ ...p, frontlines: Date.now() }))), 1800000)); // 30 min
       intervals.push(setInterval(() => fetchEndpoint('/api/frontlines?delta=7', d => ({
         frontline_ru_gain: (d as any).ru_gain?.features || [],
         frontline_ua_gain: (d as any).ua_gain?.features || [],
@@ -783,9 +778,6 @@ export default function Dashboard() {
     }
     if (activeLayers.malware) {
       intervals.push(setInterval(() => fetchEndpoint('/api/malware', d => ({ malware_threats: d.threats })), 900000)); // 15 min
-    }
-    if (activeLayers.mig31k) {
-      intervals.push(setInterval(() => fetchEndpoint('/api/mig31k', d => ({ mig31k: { detections: d.detections ?? [], updatedAt: d.timestamp } })).then(() => setLayerTimestamps(p => ({ ...p, mig31k: Date.now() }))), 60000)); // 1 min
     }
     if ((activeLayers as any).railway_incidents) {
       intervals.push(setInterval(() => fetchEndpoint('/api/railway-incidents', d => ({ railway_incidents_geo: d.features || [] })), 300000)); // 5 min
@@ -931,7 +923,7 @@ export default function Dashboard() {
       { key: 'global_incidents' as LayerKey, label: 'Global Incidents', hint: 'GDELT events' },
       { key: 'malware' as LayerKey, label: 'Live Malware', hint: 'abuse.ch feed' },
       { key: 'frontlines' as LayerKey, label: 'Frontlines', hint: 'DeepState / Militaryland' },
-      { key: 'drone_threats' as LayerKey, label: 'Drone Threats', hint: 'UA threat feed' },
+      { key: 'unified_threats' as LayerKey, label: 'Unified Threats', hint: 'UA threat feed' },
       { key: 'gps_jamming' as LayerKey, label: 'GPS Jamming', hint: 'Interference zones' },
     ].filter(l => l.key in activeLayers);
     const cmds: PaletteCommand[] = [];
@@ -1872,7 +1864,7 @@ export default function Dashboard() {
       <KeyboardShortcuts />
 
       {/* ── Confidence Legends (desktop) ── */}
-      {!isMobile && (activeLayers.thermal_aoi || activeLayers.captures || activeLayers.drone_threats || activeLayers.missile_threats) && (
+      {!isMobile && (activeLayers.thermal_aoi || activeLayers.captures || activeLayers.unified_threats) && (
         <div className="absolute bottom-[88px] right-4 z-[202] pointer-events-auto select-none">
           <div className="glass-panel p-2 text-[8px] font-mono tracking-widest min-w-[148px]">
             <button
@@ -1919,17 +1911,17 @@ export default function Dashboard() {
                     <div className="text-[6px] text-[var(--text-muted)] italic">Size = corroboration count</div>
                   </div>
                 )}
-                {/* Drone / Missile */}
-                {(activeLayers.drone_threats || activeLayers.missile_threats) && (
+                {/* Unified Threats */}
+                {activeLayers.unified_threats && (
                   <div>
-                    <div className="text-[6px] text-[var(--text-muted)] tracking-widest mb-1 uppercase">Drone / Missile</div>
+                    <div className="text-[6px] text-[var(--text-muted)] tracking-widest mb-1 uppercase">Unified Threats</div>
                     <div className="flex items-center gap-1.5 mb-0.5">
-                      <span className="inline-block w-2.5 h-2.5 rounded-full flex-shrink-0 border-2 border-[#FF1744]" style={{ background: '#CE93D8' }} />
-                      <span className="text-[var(--text-secondary)]">≥2 channels corroborated</span>
+                      <span className="inline-block w-2.5 h-2.5 rounded-full flex-shrink-0 border-2 border-[#FF1744]" style={{ background: '#FF6B00' }} />
+                      <span className="text-[var(--text-secondary)]">Висока (5+ джерел)</span>
                     </div>
                     <div className="flex items-center gap-1.5">
-                      <span className="inline-block w-2.5 h-2.5 rounded-full flex-shrink-0 border border-[#E040FB]" style={{ background: '#CE93D8', opacity: 0.65 }} />
-                      <span className="text-[var(--text-secondary)] opacity-65">Single-source sighting</span>
+                      <span className="inline-block w-2.5 h-2.5 rounded-full flex-shrink-0 border border-[#FF9800]" style={{ background: '#FF9800', opacity: 0.65 }} />
+                      <span className="text-[var(--text-secondary)] opacity-65">Середня (3-4 джерела)</span>
                     </div>
                   </div>
                 )}

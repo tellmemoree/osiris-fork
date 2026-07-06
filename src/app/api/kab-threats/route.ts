@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { stealthFetch } from '@/lib/stealthFetch';
 import path from 'path';
 import os from 'os';
+import { findBestPlace, matchOblasts, type OblastRef } from '@/lib/conflict-geo';
 import {
   loadTrackEntries, mergeAndSaveTracks,
   type TrackEntry,
@@ -50,48 +51,6 @@ const KAB_PATTERNS: RegExp[] = [
   /glide[-\s]*bomb|guided\s+(?:aerial\s+)?bomb/i,
 ];
 
-// Oblast attribution. coords are [lng, lat] (GeoJSON order), matching the existing
-// air-raid layer. Tokens are lowercase stems covering UK declensions + key cities,
-// so "Харківщину" / "Куп'янськ" / "Kharkiv" all resolve to the same oblast.
-interface OblastRef {
-  oblast: string;
-  coords: [number, number];
-  tokens: string[];
-}
-const OBLAST_REFS: OblastRef[] = [
-  { oblast: 'Kharkiv oblast', coords: [36.230, 49.990], tokens: ['харків', 'харківщ', 'kharkiv', 'чугуїв', "куп'янськ", 'kupiansk', 'вовчанськ', 'vovchansk', 'ізюм', 'izium'] },
-  { oblast: 'Sumy oblast', coords: [34.800, 50.910], tokens: ['сумщ', 'сумськ', 'сумської', 'м. суми', 'sumy', 'шостк', 'конотоп'] },
-  { oblast: 'Zaporizhzhia oblast', coords: [35.139, 47.838], tokens: ['запоріж', 'запорізьк', 'zaporizh', 'оріхів', 'оріхов', 'гуляйполе', 'huliaipole', 'токмак', 'tokmak'] },
-  { oblast: 'Kherson oblast', coords: [32.601, 46.635], tokens: ['херсон', 'херсонщ', 'kherson', 'берислав'] },
-  { oblast: 'Donetsk oblast', coords: [37.800, 48.000], tokens: ['донеччин', 'донецьк', 'donetsk', 'краматорськ', 'kramatorsk', "слов'янськ", 'покровськ', 'pokrovsk', 'костянтинівк', 'часів яр', 'торецьк', 'toretsk', 'авдіїв'] },
-  { oblast: 'Dnipropetrovsk oblast', coords: [35.046, 48.465], tokens: ['дніпропетровщ', 'дніпро', 'нікополь', 'nikopol', 'кривий ріг', 'kryvyi rih', 'павлоград', 'марганець'] },
-  { oblast: 'Chernihiv oblast', coords: [31.285, 51.498], tokens: ['чернігівщ', 'чернігів', 'chernihiv', 'новгород-сіверськ', 'семенівк'] },
-  { oblast: 'Mykolaiv oblast', coords: [31.994, 46.975], tokens: ['миколаївщ', 'миколаїв', 'mykolaiv', 'очаків', 'снігурівк'] },
-  { oblast: 'Poltava oblast', coords: [34.551, 49.588], tokens: ['полтавщ', 'полтав', 'poltava', 'кременчук', 'kremenchuk', 'лубни'] },
-  { oblast: 'Luhansk oblast', coords: [39.300, 48.566], tokens: ['луганщ', 'луганськ', 'luhansk', 'luhans', 'рубіжн', 'сєвєродонецьк', 'лисичанськ'] },
-  { oblast: 'Odesa oblast', coords: [30.723, 46.482], tokens: ['одещ', 'одеськ', 'odesa', 'odessa', 'ізмаїл', 'чорноморськ', 'южне'] },
-  { oblast: 'Kyiv oblast', coords: [30.523, 50.450], tokens: ['київщ', 'київськ', 'kyivsk', 'бровар', 'бориспіл', 'vasylkiv', 'васильків'] },
-  { oblast: 'Kyiv City', coords: [30.523, 50.450], tokens: ['kyiv', 'київ'] },
-  { oblast: 'Zhytomyr oblast', coords: [28.658, 50.255], tokens: ['житомирщ', 'житомир', 'zhytomyr', 'бердичів', 'коростень'] },
-  // Bare 'рівн' dropped — collides with 'рівня'/'рівний' (level/equal); the
-  // remaining tokens are long enough to stay specific to the place name.
-  { oblast: 'Rivne oblast', coords: [26.251, 50.620], tokens: ['рівненщ', 'рівненськ', 'rivne', 'рівного', 'рівному', 'м. рівне'] },
-  { oblast: 'Vinnytsia oblast', coords: [28.468, 49.233], tokens: ['вінниц', 'вінниці', 'vinnytsia', 'вінниця', 'жмеринк'] },
-  { oblast: 'Khmelnytskyi oblast', coords: [26.987, 49.423], tokens: ['хмельниц', 'khmelnytsk', 'хмельницьк', "кам'янець"] },
-  { oblast: 'Kirovohrad oblast', coords: [32.262, 48.508], tokens: ['кіровоград', 'kirovohrad', 'кропивниц', 'kropyvnytsk'] },
-];
-
-// Precompiled leading-boundary matchers per oblast. A token must start at a word
-// boundary — so "оріхов" no longer fires inside "горіхове" (hazel) — but trailing
-// letters are allowed because the tokens are declension stems ("запоріж" must
-// still match "запоріжжя"). Compiled once, not per request.
-const OBLAST_MATCHERS = OBLAST_REFS.map((ref) => ({
-  ref,
-  regexes: ref.tokens.map(
-    (t) => new RegExp(`(?<![\\p{L}\\p{N}])${t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'iu')
-  ),
-}));
-
 const WINDOW_HOURS = 1.5;
 const WINDOW_MS = WINDOW_HOURS * 60 * 60 * 1000;
 const CACHE_TTL_MS = 60_000;
@@ -111,6 +70,7 @@ interface KabThreat {
   alertType: 'KAB';
   lat: number;
   lng: number;
+  place?: string; // city/village named in the latest mention, if resolvable — otherwise lat/lng is the oblast centroid
   count: number;
   startedAt: string; // ISO of the most recent mention
   text: string;      // snippet of the most recent mention
@@ -143,12 +103,6 @@ const trackSeed: Promise<TrackEntry[]> = loadTrackEntries(KAB_TRACKS_FILE);
 
 function isKab(text: string): boolean {
   return KAB_PATTERNS.some((re) => re.test(text));
-}
-
-function matchOblasts(lowerText: string): OblastRef[] {
-  return OBLAST_MATCHERS
-    .filter(({ regexes }) => regexes.some((re) => re.test(lowerText)))
-    .map(({ ref }) => ref);
 }
 
 // Extract { text, ts } per message from a Telegram /s/ HTML page.
@@ -196,7 +150,7 @@ async function fetchChannel(channel: string): Promise<TgMessage[]> {
  */
 function buildThreatsFromEntries(entries: TrackEntry[]): KabThreat[] {
   type Agg = {
-    lat: number; lng: number;
+    lat: number; lng: number; place?: string;
     count: number; latestTs: number; latestText: string; sources: Set<string>;
   };
   const agg = new Map<string, Agg>();
@@ -205,7 +159,7 @@ function buildThreatsFromEntries(entries: TrackEntry[]): KabThreat[] {
     const cur = agg.get(e.oblast);
     if (!cur) {
       agg.set(e.oblast, {
-        lat: e.lat, lng: e.lng,
+        lat: e.lat, lng: e.lng, place: e.place,
         count: 1,
         latestTs: e.ts,
         latestText: e.text,
@@ -217,6 +171,11 @@ function buildThreatsFromEntries(entries: TrackEntry[]): KabThreat[] {
       if (e.ts > cur.latestTs) {
         cur.latestTs = e.ts;
         cur.latestText = e.text;
+        // Pin/place track the latest mention, same as text/ts above — an older
+        // entry's resolved place shouldn't outlive the mention it came from.
+        cur.lat = e.lat;
+        cur.lng = e.lng;
+        cur.place = e.place;
       }
     }
   }
@@ -229,6 +188,7 @@ function buildThreatsFromEntries(entries: TrackEntry[]): KabThreat[] {
       alertType: 'KAB' as const,
       lat: a.lat,
       lng: a.lng,
+      place: a.place,
       count: a.count,
       startedAt: new Date(a.latestTs).toISOString(),
       text: a.latestText.length > 220 ? a.latestText.slice(0, 220) + '…' : a.latestText,
@@ -281,14 +241,20 @@ async function buildThreats(): Promise<KabResponse> {
   // One entry per (channel, oblast) pair, timestamped at the latest mention.
   const newEntries: TrackEntry[] = [];
   for (const [, a] of agg) {
+    // A city/village named in the text is more precise than the oblast
+    // centroid — same resolution telegram-threats.ts uses for drone routes.
+    // KAB previously had no city-level geocoding at all (oblast-centroid
+    // only), which is why every KAB marker piled up at one point per oblast.
+    const place = findBestPlace(a.latestText);
     for (const channel of a.sources) {
       newEntries.push({
         weaponType:     'KAB',
         ts:             a.latestTs,
         channel,
         oblast:         a.ref.oblast,
-        lat:            a.ref.coords[1],
-        lng:            a.ref.coords[0],
+        lat:            place ? place.coords[0] : a.ref.coords[1],
+        lng:            place ? place.coords[1] : a.ref.coords[0],
+        place:          place?.name,
         text:           a.latestText.length > 220 ? a.latestText.slice(0, 220) + '…' : a.latestText,
         alarmConfirmed: false,
       });
