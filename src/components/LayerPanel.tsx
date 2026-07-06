@@ -6,7 +6,7 @@ import {
   Plane, Satellite, Activity, Sun, AlertTriangle, Camera, Flame, Target,
   CloudLightning, Radiation, Tv, Anchor, Ship, Newspaper,
   Network, Share2, Radio, Siren, Zap, Train, GitMerge, Radar,
-  Waypoints, Rocket, ArrowDownRight, Bomb, Eye
+  Waypoints, Rocket, ArrowDownRight, Bomb, Eye, Navigation
 } from 'lucide-react';
 
 interface LayerPanelProps {
@@ -157,6 +157,7 @@ const THREAT_TYPE_LEGEND: { key: string; label: string; icon: typeof Waypoints; 
   { key: 'kab',       label: 'KAB',      icon: Bomb,           color: '#FF6B00' },
   { key: 'aviation',  label: 'Aviation', icon: Plane,          color: '#536DFE' },
   { key: 'recon',     label: 'Recon',    icon: Eye,            color: '#26C6DA' },
+  { key: 'uav',       label: 'UAV',      icon: Navigation,     color: '#CDDC39' },
 ];
 
 // SVG component for Shield which was missing in the imports above

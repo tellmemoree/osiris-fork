@@ -116,8 +116,8 @@ const EMPTY_FC = { type: 'FeatureCollection' as const, features: [] };
 
 // Unified Threats — maps each `ttype` to its map-icon id and popup badge color.
 // Every type gets a visually distinct glyph (not just a distinct color); see
-// createThreatIcons() below for how each glyph is drawn. 'uav' is the fallback
-// bucket for anything that doesn't classify into one of the 6 named types.
+// createThreatIcons() below for how each glyph is drawn. 'uav' is the generic/
+// unclassified drone bucket — visually distinct from 'fpv' (delta-wing glyph).
 const THREAT_TYPE_META: Record<string, { icon: string; color: string; label: string }> = {
   fpv:       { icon: 'fpv',       color: '#FFB300', label: 'FPV-дрон' },
   cruise:    { icon: 'cruise',    color: '#FF5252', label: 'Крилата ракета' },
@@ -125,7 +125,7 @@ const THREAT_TYPE_META: Record<string, { icon: string; color: string; label: str
   kab:       { icon: 'kab',       color: '#FF6B00', label: 'Керована авіабомба' },
   aviation:  { icon: 'aviation',  color: '#536DFE', label: 'Авіація' },
   recon:     { icon: 'recon',     color: '#26C6DA', label: 'Розвідка' },
-  uav:       { icon: 'fpv',       color: '#FFB300', label: 'БпЛА' },
+  uav:       { icon: 'uav',       color: '#CDDC39', label: 'БпЛА' },
 };
 
 function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightClick, onViewStateChange, flyToLocation, highlight, projection = 'globe', mapStyle = 'dark', sweepData, scanTargets = [], demoMode = false, theme = 'core', initialCenter, initialZoom, replayTime = null, focusedAxisBbox = null, onMapReady }: OsirisMapProps) {
@@ -209,7 +209,7 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
     map.addImage(id, { width: size, height: size, data: new Uint8Array(ctx.getImageData(0, 0, size, size).data) });
   }, []);
 
-  // Draws one of the 6 Unified Threat glyphs (plus an optional white selection
+  // Draws one of the 7 Unified Threat glyphs (plus an optional white selection
   // ring) onto a canvas and registers it via map.addImage. Each type gets a
   // genuinely different shape — not just a recolor — so the legend, map icon,
   // and popup badge all read as distinct at a glance:
@@ -219,6 +219,7 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
   //   kab       — teardrop/bomb shape
   //   aviation  — chevron/plane silhouette (MiG-31K carrier, etc.)
   //   recon     — eye glyph
+  //   uav       — solid delta-wing with tail notch (generic/unclassified drone)
   const createThreatIcon = useCallback((map: maplibregl.Map, ttype: string, color: string, selected: boolean) => {
     const id = selected ? `threat-${ttype}-selected` : `threat-${ttype}`;
     if (map.hasImage(id)) return;
@@ -332,6 +333,17 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
         ctx.stroke();
         ctx.beginPath();
         ctx.arc(cx, cy, r * 0.28, 0, Math.PI * 2);
+        ctx.fill();
+        break;
+      }
+      case 'uav': {
+        // Solid delta-wing with a tail notch — generic/unclassified drone silhouette.
+        ctx.beginPath();
+        ctx.moveTo(cx, cy - r * 0.85);          // nose
+        ctx.lineTo(cx + r * 0.8, cy + r * 0.6); // right wingtip
+        ctx.lineTo(cx, cy + r * 0.25);          // tail notch
+        ctx.lineTo(cx - r * 0.8, cy + r * 0.6); // left wingtip
+        ctx.closePath();
         ctx.fill();
         break;
       }
@@ -467,10 +479,9 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
         console.error('[OsirisMap] dot icon init failed (continuing without dot icons):', e);
       }
 
-      // Unified Threats — 6 distinct glyphs + white-ring "-selected" variants.
+      // Unified Threats — 7 distinct glyphs + white-ring "-selected" variants.
       try {
-        for (const [ttype, meta] of Object.entries(THREAT_TYPE_META)) {
-          if (ttype === 'uav') continue; // 'uav' aliases the 'fpv' icon id — nothing new to draw
+        for (const [, meta] of Object.entries(THREAT_TYPE_META)) {
           createThreatIcon(map, meta.icon, meta.color, false);
           createThreatIcon(map, meta.icon, meta.color, true);
         }
@@ -750,7 +761,7 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
       const THREAT_TTYPE_COLOR_MATCH: any = ['match', ['get', 'ttype'],
         'fpv', '#FFB300', 'cruise', '#FF5252', 'ballistic', '#E040FB',
         'kab', '#FF6B00', 'aviation', '#536DFE', 'recon', '#26C6DA',
-        'uav', '#FFB300', '#FFB300',
+        'uav', '#CDDC39', '#CDDC39',
       ];
       // Base icon-image: static per-ttype match, no feature-state. MapLibre/Mapbox
       // GL forbid feature-state expressions in LAYOUT properties (paint-only) —
@@ -763,7 +774,7 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
       const THREAT_ICON_MATCH: any = ['match', ['get', 'ttype'],
         'fpv', 'threat-fpv', 'cruise', 'threat-cruise', 'ballistic', 'threat-ballistic',
         'kab', 'threat-kab', 'aviation', 'threat-aviation', 'recon', 'threat-recon',
-        'uav', 'threat-fpv', 'threat-fpv',
+        'uav', 'threat-uav', 'threat-uav',
       ];
       map.addLayer({ id: 'unified-threat-glow', type: 'circle', source: 'unified-threats', paint: {
         'circle-radius': ['interpolate', ['linear'], ['zoom'], 1, 13, 5, 22, 10, 34],
