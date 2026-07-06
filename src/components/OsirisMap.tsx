@@ -1715,16 +1715,11 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
         selectedThreatTid = null;
       }
     };
-    const onThreatClick = (e: maplibregl.MapLayerMouseEvent) => {
-      if (!e.features?.length) return;
-      const f = e.features[0];
-      const p = f.properties as any;
-      const coords = (f.geometry as any).coordinates;
-
+    const showThreatDetail = (feat: maplibregl.MapGeoJSONFeature | any, coords: [number, number]) => {
+      const p = feat.properties as any;
       const tid = String(p.tid ?? '');
       map.setFilter('unified-threat-icons-selected', ['==', ['get', 'tid'], tid]);
       selectedThreatTid = tid;
-
       const meta = THREAT_TYPE_META[p.ttype as string] ?? THREAT_TYPE_META.uav;
       const color = p.color || meta.color;
       const title = p.title || meta.label;
@@ -1737,7 +1732,6 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
           : '';
       const minutesAgo = p.ts ? Math.max(0, Math.round((Date.now() - new Date(p.ts).getTime()) / 60000)) : null;
       const sourcesCount = Number(p.sources) || 0;
-
       popup(coords, `<div style="${pStyle}border:1px solid ${color}55;max-width:300px;">
         <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:4px;">
           <div style="display:flex;align-items:center;gap:6px;">
@@ -1751,6 +1745,60 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
         ${bandBadge}
         <div style="font-size:8px;color:#5C5A54;margin-top:8px;">${sourcesCount || 1} дж. · ${minutesAgo != null ? `${minutesAgo} хвилин тому` : '—'}</div>
       </div>`);
+    };
+    const onThreatClick = (e: maplibregl.MapLayerMouseEvent) => {
+      if (!e.features?.length) return;
+      const coords = (e.features[0].geometry as any).coordinates as [number, number];
+
+      // Deduplicate by tid — both icon layers may return the same feature.
+      const all = map.queryRenderedFeatures(e.point, { layers: ['unified-threat-icons', 'unified-threat-icons-selected'] });
+      const seen = new Set<string>();
+      const unique = all.filter(f => {
+        const tid = String((f.properties as any).tid ?? f.properties?.fid ?? Math.random());
+        if (seen.has(tid)) return false;
+        seen.add(tid);
+        return true;
+      });
+
+      if (unique.length <= 1) {
+        showThreatDetail(unique[0] ?? e.features[0], coords);
+        return;
+      }
+
+      // Multiple threats at same location — show disambiguation list.
+      const rows = unique.map((f, i) => {
+        const p = f.properties as any;
+        const meta = THREAT_TYPE_META[p.ttype as string] ?? THREAT_TYPE_META.uav;
+        const color = p.color || meta.color;
+        const title = p.title || meta.label;
+        const place = p.place || p.oblast || '—';
+        const mins = p.ts ? Math.max(0, Math.round((Date.now() - new Date(p.ts).getTime()) / 60000)) : null;
+        return `<div data-threat-idx="${i}" style="cursor:pointer;padding:6px 8px;border-radius:6px;border:1px solid ${color}44;margin-bottom:4px;display:flex;align-items:center;gap:8px;">
+          <span style="color:${color};font-size:16px;line-height:1;">●</span>
+          <div style="flex:1;min-width:0;">
+            <div style="color:${color};font-size:11px;font-weight:700;">${esc(title)}</div>
+            <div style="color:#8A8880;font-size:9px;">${esc(place)}${mins != null ? ` · ${mins} хв тому` : ''}</div>
+          </div>
+        </div>`;
+      }).join('');
+
+      popup(coords, `<div style="${pStyle}border:1px solid rgba(255,255,255,0.15);min-width:220px;max-width:300px;">
+        <div style="font-size:9px;color:#5C5A54;margin-bottom:8px;letter-spacing:0.1em;">${unique.length} ЗАГРОЗ · ОБЕРІТЬ</div>
+        ${rows}
+      </div>`);
+
+      // Wire list-item clicks after popup lands in DOM.
+      setTimeout(() => {
+        popupRef.current?.getElement()?.querySelectorAll('[data-threat-idx]').forEach(el => {
+          (el as HTMLElement).style.transition = 'background 0.1s';
+          el.addEventListener('mouseenter', () => { (el as HTMLElement).style.background = 'rgba(255,255,255,0.06)'; });
+          el.addEventListener('mouseleave', () => { (el as HTMLElement).style.background = 'transparent'; });
+          el.addEventListener('click', () => {
+            const idx = Number((el as HTMLElement).dataset.threatIdx ?? 0);
+            showThreatDetail(unique[idx], coords);
+          });
+        });
+      }, 0);
     };
     // Bound on both layers — the selected overlay sits on top of the base icon
     // once a feature is selected, so re-clicking the (now larger) selected icon

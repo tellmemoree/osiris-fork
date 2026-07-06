@@ -500,7 +500,7 @@ async function computeUnifiedThreats(): Promise<UnifiedThreatsResponse> {
     filtered = deduped.filter(f => {
       if (f.properties.ttype === 'aviation') return true;
       const oblastAlarmed = alarmedOblasts !== null && alarmedOblasts.has(f.properties.oblast.toLowerCase());
-      return oblastAlarmed || f.properties.neptunConfirmed === true || f.properties.alarmConfirmed === true;
+      return oblastAlarmed || f.properties.neptunConfirmed === true;
     });
   }
 
