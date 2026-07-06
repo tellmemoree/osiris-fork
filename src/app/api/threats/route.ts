@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { confidenceBand } from '@/lib/telegram-threats';
+import { raionKeyForPoint } from '@/lib/raion-lookup';
 
 export const dynamic = 'force-dynamic';
 
@@ -50,6 +51,8 @@ export interface UnifiedThreatProperties {
   approximate: boolean;
   sources:     number;
   ts:          string;
+  alarmConfirmed?:  boolean; // drone/missile waypoint corroborated by alarm-history (source route's own check)
+  neptunConfirmed?: boolean; // point resolves into a raion currently active in /api/neptun-alerts
 }
 
 export interface UnifiedThreatFeature {
@@ -109,6 +112,7 @@ interface DroneWaypoint {
   confidence?: number;
   subtype?: 'FPV' | 'RECON' | 'UAV';
   bearing?: number | null;
+  alarmConfirmed?: boolean;
 }
 
 interface DroneWave {
@@ -129,6 +133,7 @@ interface MissileWaypoint {
   ts?: string;
   channel?: string;
   confidence?: number;
+  alarmConfirmed?: boolean;
 }
 
 interface MissileWave {
@@ -157,6 +162,20 @@ interface Mig31kData {
   detections?: Mig31kDetection[];
 }
 
+interface NeptunData {
+  updatedAt?: string | null;
+  activeKeys?: string[];
+}
+
+interface AirRaidAlert {
+  oblast?: string;
+}
+
+interface AirRaidData {
+  alerts?: AirRaidAlert[];
+  error?: unknown;
+}
+
 // ---------------------------------------------------------------------------
 // Display titles (Ukrainian), per unified type
 // ---------------------------------------------------------------------------
@@ -181,22 +200,49 @@ const BALLISTIC_FAMILY = new Set(['BALLISTIC', 'KINZHAL', 'S300', 'KH22']);
 async function computeUnifiedThreats(): Promise<UnifiedThreatsResponse> {
   const base = process.env.OSIRIS_SELF_ORIGIN ?? 'http://127.0.0.1:3000';
 
-  const [kabRes, droneRes, missileRes, mig31kRes] = await Promise.allSettled([
+  const [kabRes, droneRes, missileRes, mig31kRes, neptunRes, airRaidRes] = await Promise.allSettled([
     fetch(`${base}/api/kab-threats`,     { signal: AbortSignal.timeout(8000) }).then(r => r.ok ? r.json() as Promise<KabData>     : null),
     fetch(`${base}/api/drone-threats`,   { signal: AbortSignal.timeout(8000) }).then(r => r.ok ? r.json() as Promise<DroneData>   : null),
     fetch(`${base}/api/missile-threats`, { signal: AbortSignal.timeout(8000) }).then(r => r.ok ? r.json() as Promise<MissileData> : null),
     fetch(`${base}/api/mig31k`,          { signal: AbortSignal.timeout(8000) }).then(r => r.ok ? r.json() as Promise<Mig31kData>  : null),
+    fetch(`${base}/api/neptun-alerts`,   { signal: AbortSignal.timeout(8000) }).then(r => r.ok ? r.json() as Promise<NeptunData>  : null),
+    fetch(`${base}/api/air-raids`,       { signal: AbortSignal.timeout(8000) }).then(r => r.ok ? r.json() as Promise<AirRaidData> : null),
   ]);
 
   const kabData     = kabRes.status     === 'fulfilled' ? kabRes.value     : null;
   const droneData   = droneRes.status   === 'fulfilled' ? droneRes.value   : null;
   const missileData = missileRes.status === 'fulfilled' ? missileRes.value : null;
   const mig31kData  = mig31kRes.status   === 'fulfilled' ? mig31kRes.value  : null;
+  const neptunData  = neptunRes.status  === 'fulfilled' ? neptunRes.value  : null;
+  const airRaidData = airRaidRes.status === 'fulfilled' ? airRaidRes.value : null;
 
   if (kabRes.status === 'rejected')     console.warn('[OSIRIS] threats: kab-threats fetch failed:', kabRes.reason);
   if (droneRes.status === 'rejected')   console.warn('[OSIRIS] threats: drone-threats fetch failed:', droneRes.reason);
   if (missileRes.status === 'rejected') console.warn('[OSIRIS] threats: missile-threats fetch failed:', missileRes.reason);
   if (mig31kRes.status === 'rejected')  console.warn('[OSIRIS] threats: mig31k fetch failed:', mig31kRes.reason);
+  if (neptunRes.status === 'rejected')  console.warn('[OSIRIS] threats: neptun-alerts fetch failed:', neptunRes.reason);
+  if (airRaidRes.status === 'rejected') console.warn('[OSIRIS] threats: air-raids fetch failed:', airRaidRes.reason);
+
+  // Corroboration sources for the live-alarm filter below. Each derives to
+  // `null` when its source is unusable (rejected/non-ok/malformed/degraded),
+  // which signals "skip this check" rather than "nothing is active" — an
+  // empty-but-valid Set (no active raions/oblasts right now) is a real signal
+  // and must NOT collapse to null, or every waypoint would look confirmed.
+  // `updatedAt` is null on neptun-alerts' own stale-error fallback even when
+  // activeKeys is still a valid (possibly populated) array — gate on the
+  // array shape only, not the optional timestamp.
+  const neptunKeys: Set<string> | null =
+    neptunData && Array.isArray(neptunData.activeKeys)
+      ? new Set(neptunData.activeKeys)
+      : null;
+
+  // air-raids' stale-but-good path returns HTTP 200 with a populated `alerts`
+  // array AND a truthy `error` string — exactly the case where corroboration
+  // matters most. Gate on the array shape only, not the optional error field.
+  const alarmedOblasts: Set<string> | null =
+    airRaidData && Array.isArray(airRaidData.alerts)
+      ? new Set(airRaidData.alerts.map(a => String(a.oblast ?? '').toLowerCase()))
+      : null;
 
   const features: UnifiedThreatFeature[] = [];
 
@@ -255,6 +301,7 @@ async function computeUnifiedThreats(): Promise<UnifiedThreatsResponse> {
             approximate: !wp.place, // no named place resolved -> oblast-centroid fallback
             sources: confidence,   // confidence IS the distinct-channel count for waypoints
             ts: typeof wp.ts === 'string' ? wp.ts : new Date().toISOString(),
+            alarmConfirmed: wp.alarmConfirmed === true,
           },
         });
       }
@@ -293,6 +340,7 @@ async function computeUnifiedThreats(): Promise<UnifiedThreatsResponse> {
               approximate: !wp.place,
               sources: confidence,
               ts: typeof wp.ts === 'string' ? wp.ts : new Date().toISOString(),
+              alarmConfirmed: wp.alarmConfirmed === true,
             },
           });
         }
@@ -346,12 +394,46 @@ async function computeUnifiedThreats(): Promise<UnifiedThreatsResponse> {
   }
   const deduped = Array.from(latestByKey.values());
 
+  // -------------------------------------------------------------------------
+  // Live-alarm corroboration filter — parity with neptun.in.ua, which only
+  // shows currently-active threats, not every mention inside each source's
+  // rolling window (24h drone / 12h missile / 6h KAB). A feature survives if
+  // it's corroborated by an active oblast-level air raid, a raion-level
+  // Neptune alert, or the source route's own alarm-history check. Aviation
+  // (mig31k) bypasses this filter entirely: locationName is often an RU
+  // airfield, so alarm-oblast/raion matching structurally doesn't apply.
+  //
+  // Fail-open guard: if BOTH corroboration sources are simultaneously down,
+  // skip filtering and return `deduped` unchanged. This is the exact bug
+  // class fixed in commit 9bb93cc (an empty-but-valid air-raids array was
+  // read as a truthy Set and stripped every waypoint) — a double-outage here
+  // must never blank the whole layer.
+  let filtered: UnifiedThreatFeature[];
+  if (alarmedOblasts === null && neptunKeys === null) {
+    filtered = deduped;
+  } else {
+    const candidates = deduped.filter(f => f.properties.ttype !== 'aviation');
+    const raionKeys = await Promise.all(
+      candidates.map(f => raionKeyForPoint(f.geometry.coordinates[1], f.geometry.coordinates[0])),
+    );
+    candidates.forEach((f, i) => {
+      const key = raionKeys[i];
+      f.properties.neptunConfirmed = neptunKeys !== null && key !== null && neptunKeys.has(key);
+    });
+
+    filtered = deduped.filter(f => {
+      if (f.properties.ttype === 'aviation') return true;
+      const oblastAlarmed = alarmedOblasts !== null && alarmedOblasts.has(f.properties.oblast.toLowerCase());
+      return oblastAlarmed || f.properties.neptunConfirmed === true || f.properties.alarmConfirmed === true;
+    });
+  }
+
   // Stable per-response index for map click-to-select (the unified-threats
   // GeoJSON source has no generateId, so features carry no usable id otherwise).
-  deduped.forEach((f, i) => { f.properties.fid = i; });
+  filtered.forEach((f, i) => { f.properties.fid = i; });
 
   return {
-    features: { type: 'FeatureCollection', features: deduped },
+    features: { type: 'FeatureCollection', features: filtered },
     // Passed through unchanged — existing page.tsx alarm_vectors layer depends
     // on these fields continuing to exist in this exact shape.
     alarm_vectors: Array.isArray(droneData?.alarm_vectors) ? droneData!.alarm_vectors! : [],
