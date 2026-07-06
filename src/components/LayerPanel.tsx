@@ -52,7 +52,7 @@ const getLayerGroups = (theme: 'core' | 'ghost') => {
   },
   {
     label: 'MARITIME',
-    fullLabel: 'MARITIME & SPACE',
+    fullLabel: 'MARITIME',
     color: '#00BCD4',
     layers: [
       { key: 'maritime', label: 'Maritime / Naval', icon: Anchor, color: '#00BCD4', dataKey: 'maritime_ports,maritime_chokepoints' },
@@ -61,6 +61,13 @@ const getLayerGroups = (theme: 'core' | 'ghost') => {
       { key: 'shadow_fleet_tracks', label: 'Fleet Tracks', icon: Activity, color: '#E040FB', dataKey: 'shadow_fleet_tracks' },
       { key: 'dark_vessel_dr', label: 'Dark Vessel DR', icon: Radio, color: '#E040FB', dataKey: '' },
       { key: 'cables', label: 'Submarine Cables', icon: Share2, color: '#4FC3F7', dataKey: 'submarine_cables' },
+    ],
+  },
+  {
+    label: 'ORBITAL',
+    fullLabel: 'ORBITAL / SPACE',
+    color: '#D4AF37',
+    layers: [
       { key: 'satellites', label: 'All Satellites', icon: Satellite, color: '#D4AF37', dataKey: 'satellites' },
       { key: 'sat_comms', label: 'Starlink / Comms', icon: Satellite, color: '#00E5FF', dataKey: 'satellites', catKey: 'comms' },
       { key: 'sat_military', label: 'Military / Intel', icon: Satellite, color: '#FF3D3D', dataKey: 'satellites', catKey: 'military' },

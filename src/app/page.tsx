@@ -3,7 +3,7 @@
 import { useEffect, useState, useRef, useCallback, useMemo } from 'react';
 import dynamic from 'next/dynamic';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Layers, BarChart3, Newspaper, Search, X, Globe, MapPinned, Radar, Satellite, Moon, ExternalLink, AlertTriangle, Activity, Database, Wifi, ChevronDown, ChevronUp, Bell, MoreHorizontal, Play, FileText, Network, Crosshair, GitMerge, Orbit } from 'lucide-react';
+import { Layers, BarChart3, Newspaper, Search, X, Globe, MapPinned, Radar, Satellite, Moon, ExternalLink, AlertTriangle, Activity, Database, Wifi, ChevronDown, ChevronUp, Bell, MoreHorizontal, Play, FileText, Network, Crosshair, GitMerge, Orbit, TrendingUp } from 'lucide-react';
 import IntelFeed from '@/components/IntelFeed';
 import MarketsPanel from '@/components/MarketsPanel';
 import ScmPanel from '@/components/ScmPanel';
@@ -283,6 +283,7 @@ export default function Dashboard() {
     railway_network: false,
     railway_incidents: false,
     correlated_events: false,
+    frontline_delta: false,
   });
   // Persist active layer toggles across restarts — read on mount, write on every change.
   // Skip the first write (count=1, initial defaults) so we don't overwrite saved state
@@ -593,6 +594,13 @@ export default function Dashboard() {
       // Fetch current frontline overlay
       fetchEndpoint('/api/frontlines', d => ({ frontlines: d.frontlines?.features || [] })).then(() => setLayerTimestamps(p => ({ ...p, frontlines: Date.now() })));
       // Fetch directional 7-day delta (RU gain / UA gain)
+      fetchEndpoint('/api/frontlines?delta=7', d => ({
+        frontline_ru_gain: (d as any).ru_gain?.features || [],
+        frontline_ua_gain: (d as any).ua_gain?.features || [],
+        frontline_delta_compare_date: (d as any).actual_compare_date || (d as any).compare_date || null,
+      }));
+    },
+    frontline_delta: () => {
       fetchEndpoint('/api/frontlines?delta=7', d => ({
         frontline_ru_gain: (d as any).ru_gain?.features || [],
         frontline_ua_gain: (d as any).ua_gain?.features || [],
@@ -1453,15 +1461,15 @@ export default function Dashboard() {
         {/* Frontline change tracker toggle */}
         <button
           onClick={() => setShowFrontlineTracker(t => !t)}
-          title="Frontline change tracker"
+          title="Frontline footprint tracker"
           className={`w-8 h-8 rounded-full flex items-center justify-center transition-colors ${showFrontlineTracker ? 'bg-[#FF3D3D]/20' : 'hover:bg-white/10'}`}
         >
-          <Activity className={`w-4 h-4 ${showFrontlineTracker ? 'text-[#FF3D3D]' : 'text-white/60'}`} />
+          <TrendingUp className={`w-4 h-4 ${showFrontlineTracker ? 'text-[#FF3D3D]' : 'text-white/60'}`} />
         </button>
 
         {/* Axis Briefing toggle */}
         <button
-          onClick={() => setShowAxisBriefing(t => !t)}
+          onClick={() => { setShowAxisBriefing(t => !t); setShowFusion(false); setShowThreatTimeline(false); }}
           title="Axis briefing"
           className={`w-8 h-8 rounded-full flex items-center justify-center transition-colors ${showAxisBriefing ? 'bg-[var(--gold-primary)]/20' : 'hover:bg-white/10'}`}
         >
@@ -1470,7 +1478,7 @@ export default function Dashboard() {
 
         {/* Threat Timeline toggle */}
         <button
-          onClick={() => setShowThreatTimeline(t => !t)}
+          onClick={() => { setShowThreatTimeline(t => !t); setShowAxisBriefing(false); setShowFusion(false); }}
           className={`p-2 rounded transition-colors ${showThreatTimeline ? 'bg-orange-500/20 text-orange-400' : 'text-white/40 hover:text-white/70'}`}
           title="Threat Timeline"
         >
@@ -1479,14 +1487,14 @@ export default function Dashboard() {
 
         {/* Entity graph (Intelligence Layer) toggle */}
         <div className="relative group">
-          <button onClick={() => { setShowEntityGraph(!showEntityGraph); setShowIntel(false); setShowMarkets(false); setShowAlerts(false); setShowSearch(false); setShowFusion(false); }} className={`w-8 h-8 rounded-full flex items-center justify-center transition-colors ${showEntityGraph ? 'bg-[#D4AF37]/20' : 'hover:bg-white/10'}`}>
+          <button onClick={() => { setShowEntityGraph(!showEntityGraph); setShowIntel(false); setShowMarkets(false); setShowAlerts(false); setShowSearch(false); setShowFusion(false); setShowAxisBriefing(false); }} className={`w-8 h-8 rounded-full flex items-center justify-center transition-colors ${showEntityGraph ? 'bg-[#D4AF37]/20' : 'hover:bg-white/10'}`}>
             <Network className={`w-4 h-4 ${showEntityGraph ? 'text-[#D4AF37]' : 'text-white/60'}`} />
           </button>
         </div>
 
         {/* Threat Fusion HUD toggle */}
         <div className="relative group">
-          <button onClick={() => { setShowFusion(f => !f); setShowIntel(false); setShowMarkets(false); setShowAlerts(false); setShowSearch(false); setShowEntityGraph(false); }} className={`w-8 h-8 rounded-full flex items-center justify-center transition-colors ${showFusion ? 'bg-[#FF1744]/20' : 'hover:bg-white/10'}`} title="Global Threat Fusion">
+          <button onClick={() => { setShowFusion(f => !f); setShowIntel(false); setShowMarkets(false); setShowAlerts(false); setShowSearch(false); setShowEntityGraph(false); setShowAxisBriefing(false); setShowThreatTimeline(false); }} className={`w-8 h-8 rounded-full flex items-center justify-center transition-colors ${showFusion ? 'bg-[#FF1744]/20' : 'hover:bg-white/10'}`} title="Global Threat Fusion">
             <Orbit className={`w-4 h-4 ${showFusion ? 'text-[#FF1744]' : 'text-white/60'}`} />
           </button>
           {showFusion && (
@@ -1711,7 +1719,10 @@ export default function Dashboard() {
                     />
                   )}
                   {mobilePanel === 'frontline' && (
-                    <FrontlineTracker />
+                    <FrontlineTracker
+                      showDelta={activeLayers.frontline_delta}
+                      onDeltaToggle={() => setActiveLayers((l: any) => ({ ...l, frontline_delta: !l.frontline_delta }))}
+                    />
                   )}
                 </div>
               </motion.div>
@@ -1750,7 +1761,10 @@ export default function Dashboard() {
             transition={{ duration: 0.25 }}
             className="absolute bottom-6 right-14 z-[205] pointer-events-none"
           >
-            <FrontlineTracker />
+            <FrontlineTracker
+              showDelta={activeLayers.frontline_delta}
+              onDeltaToggle={() => setActiveLayers((l: any) => ({ ...l, frontline_delta: !l.frontline_delta }))}
+            />
           </motion.div>
         )}
       </AnimatePresence>

@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { TrendingUp, TrendingDown, Minus, Activity } from 'lucide-react';
+import { TrendingUp, TrendingDown, Minus, Activity, Layers } from 'lucide-react';
 
 interface ChangeData {
   current: { date: string; areaKm2: number; features: number };
@@ -66,7 +66,7 @@ function hottestPatch(delta: DeltaData | null): { direction: 'ru_gain' | 'ua_gai
   return best;
 }
 
-export default function FrontlineTracker({ isMobile = false }: { isMobile?: boolean }) {
+export default function FrontlineTracker({ isMobile = false, showDelta = false, onDeltaToggle }: { isMobile?: boolean; showDelta?: boolean; onDeltaToggle?: () => void }) {
   const [d, setD] = useState<ChangeData | null>(null);
   const [delta, setDelta] = useState<DeltaData | null>(null);
   const [failed, setFailed] = useState(false);
@@ -168,6 +168,18 @@ export default function FrontlineTracker({ isMobile = false }: { isMobile?: bool
       <div className="mt-2.5 border-t border-white/10 pt-2 text-[9px] leading-snug text-white/30">
         ▲ RU expansion · ▼ contraction · DeepState assessment
       </div>
+
+      {onDeltaToggle && (
+        <button
+          onClick={onDeltaToggle}
+          className={`mt-2 w-full flex items-center justify-center gap-1.5 rounded-lg py-1.5 text-[9px] font-mono tracking-wider uppercase transition-colors ${
+            showDelta ? 'bg-[#FF3D3D]/15 text-[#FF3D3D]' : 'text-white/30 hover:bg-white/5 hover:text-white/50'
+          }`}
+        >
+          <Layers size={10} />
+          {showDelta ? 'Hide delta map' : 'Show delta map'}
+        </button>
+      )}
     </div>
   );
 }

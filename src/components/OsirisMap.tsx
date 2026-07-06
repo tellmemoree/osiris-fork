@@ -2482,12 +2482,13 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
   }, [mapReady, data.frontlines, activeLayers.frontlines, setGeo]);
 
   // Directional frontline delta — RU gain (orange-red) / UA gain (blue) patches.
+  // Gated on frontlines OR the standalone frontline_delta toggle (from FrontlineTracker button).
   useEffect(() => {
     if (!mapReady) return;
-    const active = activeLayers.frontlines;
+    const active = activeLayers.frontlines || activeLayers.frontline_delta;
     setGeo('frontline-ru-gain', active && data.frontline_ru_gain ? data.frontline_ru_gain : []);
     setGeo('frontline-ua-gain', active && data.frontline_ua_gain ? data.frontline_ua_gain : []);
-  }, [mapReady, data.frontline_ru_gain, data.frontline_ua_gain, activeLayers.frontlines, setGeo]);
+  }, [mapReady, data.frontline_ru_gain, data.frontline_ua_gain, activeLayers.frontlines, activeLayers.frontline_delta, setGeo]);
 
   // Axis briefing: draw bbox rectangle or clear when focus changes
   useEffect(() => {
@@ -3140,7 +3141,7 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
     setVis(['thermal-aoi-glow','thermal-aoi-dots','thermal-aoi-label','thermal-aoi-unconfirmed-label'], activeLayers.thermal_aoi);
     setVis(['capture-glow','capture-dots'], activeLayers.captures);
     setVis(['frontline-fill','frontline-line'], activeLayers.frontlines);
-    setVis(['frontline-ru-gain-fill','frontline-ru-gain-line','frontline-ua-gain-fill','frontline-ua-gain-line'], activeLayers.frontlines);
+    setVis(['frontline-ru-gain-fill','frontline-ru-gain-line','frontline-ua-gain-fill','frontline-ua-gain-line'], activeLayers.frontlines || activeLayers.frontline_delta);
     setVis(['pressure-oblast-fill','pressure-oblast-outline'], activeLayers.oblast_pressure);
     setVis(['shadow-track-line'], activeLayers.shadow_fleet_tracks);
     setVis(['aq-glow','aq-dots','aq-label'], activeLayers.air_quality);
