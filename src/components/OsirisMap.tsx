@@ -490,7 +490,7 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
       }
 
       // Sources
-      const sources = ['flights','military','jets','private-fl','satellites','earthquakes','gdelt','gps-jamming','day-night','cctv','fires','weather','infrastructure','maritime','maritime-choke','maritime-ships','live-news','sigint-news','conflict-zones', 'balloons', 'radiation', 'ip-sweep-devices', 'ip-sweep-pulse', 'ip-sweep-connections', 'scan-targets', 'sdk-entities', 'sdk-links', 'air-raid-alerts', 'power-outages', 'frontlines', 'frontline-ru-gain', 'frontline-ua-gain', 'axis-focus', 'air-quality', 'ioda-outages', 'malware-nodes', 'thermal-aoi', 'captures', 'network-mesh', 'shadow-fleet-tracks', 'alarm-vectors', 'unified-threats', 'dark-vessel-uncertainty', 'dark-vessel-dr', 'railway-incidents', 'correlated-events'];
+      const sources = ['flights','military','jets','private-fl','satellites','earthquakes','gdelt','gps-jamming','day-night','cctv','fires','weather','infrastructure','maritime','maritime-choke','maritime-ships','live-news','sigint-news','conflict-zones', 'balloons', 'radiation', 'ip-sweep-devices', 'ip-sweep-pulse', 'ip-sweep-connections', 'scan-targets', 'sdk-entities', 'sdk-links', 'air-raid-alerts', 'power-outages', 'frontlines', 'frontline-ru-gain', 'frontline-ua-gain', 'axis-focus', 'air-quality', 'ioda-outages', 'malware-nodes', 'thermal-aoi', 'captures', 'network-mesh', 'shadow-fleet-tracks', 'alarm-vectors', 'unified-threats', 'threat-trails', 'dark-vessel-uncertainty', 'dark-vessel-dr', 'railway-incidents', 'correlated-events'];
       sources.forEach(s => map.addSource(s, { type: 'geojson', data: EMPTY_FC }));
 
       // Static rail network — loaded directly from public/ukraine-railways.geojson (ODbL)
@@ -776,6 +776,14 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
         'kab', 'threat-kab', 'aviation', 'threat-aviation', 'recon', 'threat-recon',
         'uav', 'threat-uav', 'threat-uav',
       ];
+      // Drone trail lines — historical breadcrumb path for each moving chain,
+      // rendered behind the glow+icon so the dot stays visually dominant.
+      map.addLayer({ id: 'threat-trail-line', type: 'line', source: 'threat-trails', paint: {
+        'line-color': ['coalesce', ['get', 'color'], '#FFFFFF'],
+        'line-width': 1.5,
+        'line-opacity': 0.45,
+        'line-dasharray': [2, 2],
+      }});
       map.addLayer({ id: 'unified-threat-glow', type: 'circle', source: 'unified-threats', paint: {
         'circle-radius': ['interpolate', ['linear'], ['zoom'], 1, 13, 5, 22, 10, 34],
         'circle-color': THREAT_TTYPE_COLOR_MATCH, 'circle-opacity': 0.14, 'circle-blur': 1,
@@ -2876,6 +2884,24 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
           },
         };
       }));
+    // Trail lines — one LineString per chain with >=2 trail points, rendered
+    // behind the icon layer. Static threats (kab/ballistic/etc.) never have
+    // trail arrays so they're naturally excluded by the length check.
+    const trailFeatures: any[] = [];
+    for (const t of threats) {
+      const p = t?.properties || {};
+      if (!Array.isArray(p.trail) || p.trail.length < 2) continue;
+      const meta = THREAT_TYPE_META[p.ttype as string] ?? THREAT_TYPE_META.uav;
+      trailFeatures.push({
+        type: 'Feature',
+        geometry: {
+          type: 'LineString',
+          coordinates: (p.trail as Array<{ lat: number; lng: number }>).map(pt => [pt.lng, pt.lat]),
+        },
+        properties: { color: meta.color },
+      });
+    }
+    setGeo('threat-trails', trailFeatures);
   }, [mapReady, data.threats, activeLayers.unified_threats, setGeo]);
 
   // Alarm-Vector inference layer — LineString from→to + Point arrow at destination.
@@ -3060,7 +3086,7 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
     setVis(['sweep-connections','sweep-pulse-ring','sweep-device-glow','sweep-device-dots','sweep-device-labels'], true);
     setVis(['raid-oblast-fill','raid-oblast-outline','raid-district-fill','raid-district-outline','raid-glow','raid-dots','raid-label'], activeLayers.air_raids);
     setVis(['outage-oblast-fill','outage-oblast-outline','outage-glow','outage-dots','outage-label'], activeLayers.power_outages);
-    setVis(['unified-threat-glow','unified-threat-icons','unified-threat-icons-selected','unified-threat-label'], activeLayers.unified_threats);
+    setVis(['threat-trail-line','unified-threat-glow','unified-threat-icons','unified-threat-icons-selected','unified-threat-label'], activeLayers.unified_threats);
     setVis(['alarm-vector-line','alarm-vector-arrow','alarm-vector-label'], activeLayers.unified_threats || activeLayers.alarm_vectors);
     setVis(['ru-raid-glow','ru-raid-dots','ru-raid-label'], activeLayers.ru_air_raids);
     setVis(['thermal-aoi-glow','thermal-aoi-dots','thermal-aoi-label','thermal-aoi-unconfirmed-label'], activeLayers.thermal_aoi);
